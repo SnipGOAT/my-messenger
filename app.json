@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "MyMessenger",
+    "slug": "MyMessenger",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.snipgoat.MyMessenger"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "owner": "snipgoat",
+    "extra": {
+      "eas": {
+        "projectId": "4cbec8e3-1e14-48e0-8232-c1c63017117a"
+      }
+    }
+  }
+}

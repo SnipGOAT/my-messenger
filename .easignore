@@ -1,0 +1,18 @@
+# Исключаем системные папки из EAS сборки
+AppData/
+**/AppData/**
+**/Chrome/**
+**/Telegram Desktop/**
+**/Cache/**
+**/Code Cache/**
+**/Local Storage/**
+
+# Стандартные исключения
+node_modules/
+.expo/
+dist/
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,32 @@
+# Зависимости
+node_modules/
+.expo/
+dist/
+npm-debug.*
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Системные папки (исключаем из сборки)
+AppData/
+**/AppData/**
+
+# Кэши
+.cache/
+**/.cache/**
+
+# Временные файлы
+*.tmp
+*.temp
