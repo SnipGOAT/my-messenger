@@ -1,5 +1,5 @@
 // App.js
-import React, { useEffect } from 'react';
+import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -18,7 +18,6 @@ import CreateStoryScreen from './screens/CreateStoryScreen';
 import StoryViewerScreen from './screens/StoryViewerScreen';
 import ViewProfileScreen from './screens/ViewProfileScreen';
 import { View, Text, useWindowDimensions, Platform } from 'react-native';
-import { checkSupabaseConnection } from './lib/supabase';
 
 const Stack = createNativeStackNavigator();
 
@@ -28,11 +27,6 @@ function AppContent() {
   const isDesktop = Platform.OS === 'web' && width > 768;
 
   usePushNotifications();
-
-  // Проверка подключения к Supabase
-  useEffect(() => {
-    checkSupabaseConnection();
-  }, []);
 
   if (loading) {
     return (
