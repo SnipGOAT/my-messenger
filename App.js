@@ -23,7 +23,7 @@ const Stack = createNativeStackNavigator();
 
 // Функция для получения заголовка по route
 const getDocumentTitle = (route) => {
-  if (!route) return 'MAX 2.0';
+  if (!route || !route.name) return 'MAX 2.0';
 
   const titleMap = {
     'Auth': 'Вход — MAX 2.0',
@@ -44,8 +44,9 @@ const getDocumentTitle = (route) => {
 
 // Функция для получения текущего route
 const getActiveRoute = (state) => {
-  if (!state) return null;
+  if (!state || !state.routes || state.index === undefined) return null;
   const route = state.routes[state.index];
+  if (!route) return null;
   if (route.state) {
     return getActiveRoute(route.state);
   }
@@ -60,18 +61,32 @@ function AppContent() {
 
   usePushNotifications();
 
-  // Базовый заголовок при загрузке
+  // Устанавливаем заголовок в зависимости от состояния
   useEffect(() => {
-    if (typeof document !== 'undefined') {
+    if (typeof document === 'undefined') return;
+
+    if (loading) {
       document.title = 'MAX 2.0';
+    } else if (!session) {
+      document.title = 'Вход — MAX 2.0';
+    } else if (isDesktop) {
+      document.title = 'Мои чаты — MAX 2.0';
     }
-  }, []);
+  }, [loading, session, isDesktop]);
 
   // Обработчик изменения навигации
   const handleStateChange = (state) => {
-    if (typeof document === 'undefined' || !state) return;
+    if (typeof document === 'undefined') return;
+    
+    // Если состояние пустое или невалидное — ставим дефолт
+    if (!state || !state.routes || state.index === undefined) {
+      document.title = 'MAX 2.0';
+      return;
+    }
+    
     const route = getActiveRoute(state);
-    document.title = getDocumentTitle(route);
+    const title = getDocumentTitle(route);
+    document.title = title;
   };
 
   // При готовности навигации
@@ -79,7 +94,8 @@ function AppContent() {
     if (typeof document === 'undefined' || !navigationRef.current) return;
     const state = navigationRef.current.getRootState();
     const route = getActiveRoute(state);
-    document.title = getDocumentTitle(route);
+    const title = getDocumentTitle(route);
+    document.title = title;
   };
 
   if (loading) {
