@@ -16,10 +16,10 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 
-const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👎'];
+const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '', '🔥', '👎'];
 
 const FILE_ICONS = {
-  pdf: '📄', doc: '📝', docx: '📝', xls: '📊', xlsx: '📊',
+  pdf: '📄', doc: '📝', docx: '📝', xls: '', xlsx: '📊',
   ppt: '📽️', pptx: '📽️', zip: '🗜️', rar: '🗜️', '7z': '🗜️',
   txt: '📃', default: '📎'
 };
@@ -120,10 +120,8 @@ export default function ChatScreen({ route, navigation }) {
 
   const [stagedMedia, setStagedMedia] = useState(null);
 
-  // НОВОЕ: для Markdown-форматирования
   const [inputSelection, setInputSelection] = useState({ start: 0, end: 0 });
 
-  // Для отслеживания прочтений в группах
   const [messageReads, setMessageReads] = useState({});
   const [readersModalVisible, setReadersModalVisible] = useState(false);
   const [readersList, setReadersList] = useState([]);
@@ -398,11 +396,9 @@ export default function ChatScreen({ route, navigation }) {
     }
   };
 
-  // НОВОЕ: Обработчик кнопок форматирования
   const handleFormatButton = (marker) => {
     const result = wrapWithMarkdown(text, inputSelection, marker);
     setText(result.text);
-    // Возвращаем фокус в поле ввода
     setTimeout(() => {
       if (textInputRef.current) {
         textInputRef.current.focus();
@@ -676,7 +672,7 @@ export default function ChatScreen({ route, navigation }) {
         
         {item.forwarded_from_username && (
           <Text style={[styles.forwardedLabel, { color: isMe ? 'rgba(255,255,255,0.8)' : colors.primary }]}>
-            ↪️ Переслано от {item.forwarded_from_username}
+            ️ Переслано от {item.forwarded_from_username}
           </Text>
         )}
 
@@ -696,7 +692,6 @@ export default function ChatScreen({ route, navigation }) {
           />
         )}
 
-        {/* НОВОЕ: Рендер текста с поддержкой Markdown */}
         {hasText && (
           <Text style={[styles.messageText, { color: textColor }, hasImage && styles.textOnImage]}>
             {parseMarkdown(item.content, textColor, !!hasImage)}
@@ -744,7 +739,7 @@ export default function ChatScreen({ route, navigation }) {
   const canPin = !isGroup || (isGroup && isCreator);
 
   const getFileIcon = (fileName) => {
-    if (!fileName) return '📎';
+    if (!fileName) return '';
     const ext = fileName.split('.').pop().toLowerCase();
     return FILE_ICONS[ext] || FILE_ICONS.default;
   };
@@ -813,6 +808,25 @@ export default function ChatScreen({ route, navigation }) {
           <TouchableOpacity onPress={() => setIsSearchActive(true)} style={styles.chatHeaderButton}>
             <Text style={{ fontSize: 20 }}>🔍</Text>
           </TouchableOpacity>
+          {!isGroup && (
+            <TouchableOpacity 
+              onPress={() => {
+                const otherUserMessage = messages.find(m => m.sender_id !== currentUserId);
+                if (otherUserMessage) {
+                  navigation?.navigate('Call', { 
+                    chatId, 
+                    title, 
+                    isVideoCall: false,
+                    callerId: currentUserId,
+                    targetUserId: otherUserMessage.sender_id 
+                  });
+                }
+              }} 
+              style={styles.chatHeaderButton}
+            >
+              <Text style={{ fontSize: 20 }}>📞</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity onPress={() => navigation?.navigate('ChatInfo', { chatId, title, isGroup })} style={styles.chatHeaderButton}>
             <Text style={{ fontSize: 20 }}>⚙️</Text>
           </TouchableOpacity>
@@ -948,7 +962,7 @@ export default function ChatScreen({ route, navigation }) {
             {uploading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.previewSendButtonText}>➤ Отправить</Text>
+              <Text style={styles.previewSendButtonText}> Отправить</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -956,7 +970,6 @@ export default function ChatScreen({ route, navigation }) {
 
       {!isRecording && !stagedMedia && (
         <>
-          {/* НОВОЕ: Панель форматирования Markdown */}
           <View style={[styles.formatToolbar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
             <TouchableOpacity 
               style={[styles.formatButton, { backgroundColor: colors.inputBackground }]} 
@@ -999,10 +1012,10 @@ export default function ChatScreen({ route, navigation }) {
               </TouchableOpacity>
             )}
             <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickImageForPreview} disabled={uploading}>
-              {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>🖼️</Text>}
+              {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>️</Text>}
             </TouchableOpacity>
             <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickVideoForPreview} disabled={uploading}>
-              {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>🎥</Text>}
+              {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}></Text>}
             </TouchableOpacity>
             <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickDocumentForPreview} disabled={uploading}>
               {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>📎</Text>}
@@ -1069,7 +1082,7 @@ export default function ChatScreen({ route, navigation }) {
 
               {canPin && selectedMessage?.id !== pinnedMessage?.id && (
                 <TouchableOpacity style={styles.actionMenuItem} activeOpacity={0.7} onPress={() => handlePinMessage(selectedMessage.id)}>
-                  <Text style={[styles.actionMenuText, { color: colors.primary }]}>📌 Закрепить</Text>
+                  <Text style={[styles.actionMenuText, { color: colors.primary }]}> Закрепить</Text>
                 </TouchableOpacity>
               )}
               {pinnedMessage && selectedMessage?.id === pinnedMessage.id && (
@@ -1080,7 +1093,7 @@ export default function ChatScreen({ route, navigation }) {
 
               {selectedMessage?.sender_id === currentUserId && !selectedMessage.file_url && !selectedMessage.video_url && !selectedMessage.audio_url && !selectedMessage.file_document_url && (
                 <TouchableOpacity style={styles.actionMenuItem} activeOpacity={0.7} onPress={() => { setText(selectedMessage.content); setEditingMessage(selectedMessage); setActionMenuVisible(false); }}>
-                  <Text style={[styles.actionMenuText, { color: colors.text }]}>✏️ Редактировать</Text>
+                  <Text style={[styles.actionMenuText, { color: colors.text }]}>️ Редактировать</Text>
                 </TouchableOpacity>
               )}
               {selectedMessage?.sender_id === currentUserId && (
@@ -1263,7 +1276,6 @@ const styles = StyleSheet.create({
   previewSendButton: { height: 44, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
   previewSendButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
 
-  // НОВОЕ: Стили для панели форматирования
   formatToolbar: { 
     flexDirection: 'row', 
     alignItems: 'center', 

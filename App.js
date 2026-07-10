@@ -17,11 +17,11 @@ import ChatMediaScreen from './screens/ChatMediaScreen';
 import CreateStoryScreen from './screens/CreateStoryScreen';
 import StoryViewerScreen from './screens/StoryViewerScreen';
 import ViewProfileScreen from './screens/ViewProfileScreen';
+import CallScreen from './screens/CallScreen';
 import { View, Text, useWindowDimensions, Platform } from 'react-native';
 
 const Stack = createNativeStackNavigator();
 
-// Функция для получения заголовка по route
 const getDocumentTitle = (route) => {
   if (!route || !route.name) return 'MAX 2.0';
 
@@ -37,12 +37,12 @@ const getDocumentTitle = (route) => {
     'CreateStory': 'Новый статус — MAX 2.0',
     'StoryViewer': 'Статус — MAX 2.0',
     'ViewProfile': route.params?.username ? `${route.params.username} — MAX 2.0` : 'Профиль — MAX 2.0',
+    'Call': route.params?.title ? `${route.params.title} — MAX 2.0` : 'Звонок — MAX 2.0',
   };
 
   return titleMap[route.name] || 'MAX 2.0';
 };
 
-// Функция для получения текущего route
 const getActiveRoute = (state) => {
   if (!state || !state.routes || state.index === undefined) return null;
   const route = state.routes[state.index];
@@ -61,24 +61,15 @@ function AppContent() {
 
   usePushNotifications();
 
-  // Устанавливаем заголовок в зависимости от состояния
   useEffect(() => {
-    if (typeof document === 'undefined') return;
-
-    if (loading) {
+    if (typeof document !== 'undefined') {
       document.title = 'MAX 2.0';
-    } else if (!session) {
-      document.title = 'Вход — MAX 2.0';
-    } else if (isDesktop) {
-      document.title = 'Мои чаты — MAX 2.0';
     }
-  }, [loading, session, isDesktop]);
+  }, []);
 
-  // Обработчик изменения навигации
   const handleStateChange = (state) => {
     if (typeof document === 'undefined') return;
     
-    // Если состояние пустое или невалидное — ставим дефолт
     if (!state || !state.routes || state.index === undefined) {
       document.title = 'MAX 2.0';
       return;
@@ -89,7 +80,6 @@ function AppContent() {
     document.title = title;
   };
 
-  // При готовности навигации
   const handleReady = () => {
     if (typeof document === 'undefined' || !navigationRef.current) return;
     const state = navigationRef.current.getRootState();
@@ -173,6 +163,11 @@ function AppContent() {
             name="ViewProfile" 
             component={ViewProfileScreen} 
             options={{ title: 'Профиль' }} 
+          />
+          <Stack.Screen 
+            name="Call" 
+            component={CallScreen} 
+            options={{ headerShown: false }} 
           />
         </Stack.Navigator>
       )}

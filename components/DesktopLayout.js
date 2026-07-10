@@ -11,8 +11,7 @@ import ChatMediaScreen from '../screens/ChatMediaScreen';
 import CreateStoryScreen from '../screens/CreateStoryScreen';
 import StoryViewerScreen from '../screens/StoryViewerScreen';
 import ViewProfileScreen from '../screens/ViewProfileScreen';
-import StoryViewsScreen from '../screens/StoryViewsScreen';
-import EditProfileScreen from '../screens/EditProfileScreen';
+import CallScreen from '../screens/CallScreen';
 
 export default function DesktopLayout() {
   const [activeChatId, setActiveChatId] = useState(null);
@@ -22,8 +21,7 @@ export default function DesktopLayout() {
   const [chatMediaParams, setChatMediaParams] = useState(null);
   const [storyViewerParams, setStoryViewerParams] = useState(null);
   const [viewProfileParams, setViewProfileParams] = useState(null);
-  const [storyViewsParams, setStoryViewsParams] = useState(null);
-  const [editProfileParams, setEditProfileParams] = useState(null);
+  const [callParams, setCallParams] = useState(null);
 
   const navigation = {
     navigate: (screen, params) => {
@@ -51,12 +49,9 @@ export default function DesktopLayout() {
       } else if (screen === 'ViewProfile') {
         setActiveScreen('viewProfile');
         setViewProfileParams(params);
-      } else if (screen === 'StoryViews') {
-        setActiveScreen('storyViews');
-        setStoryViewsParams(params);
-      } else if (screen === 'EditProfile') {
-        setActiveScreen('editProfile');
-        setEditProfileParams(params);
+      } else if (screen === 'Call') {
+        setActiveScreen('call');
+        setCallParams(params);
       }
     },
     goBack: () => {
@@ -66,8 +61,7 @@ export default function DesktopLayout() {
       setChatMediaParams(null);
       setStoryViewerParams(null);
       setViewProfileParams(null);
-      setStoryViewsParams(null);
-      setEditProfileParams(null);
+      setCallParams(null);
     }
   };
 
@@ -98,10 +92,8 @@ export default function DesktopLayout() {
           <StoryViewerScreen route={{ params: storyViewerParams }} navigation={navigation} />
         ) : activeScreen === 'viewProfile' && viewProfileParams ? (
           <ViewProfileScreen route={{ params: viewProfileParams }} navigation={navigation} />
-        ) : activeScreen === 'storyViews' && storyViewsParams ? (
-          <StoryViewsScreen route={{ params: storyViewsParams }} navigation={navigation} />
-        ) : activeScreen === 'editProfile' && editProfileParams ? (
-          <EditProfileScreen route={{ params: editProfileParams }} navigation={navigation} />
+        ) : activeScreen === 'call' && callParams ? (
+          <CallScreen route={{ params: callParams }} navigation={navigation} />
         ) : (
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
             <Text style={{ fontSize: 18, color: '#888' }}>Выберите чат или откройте настройки</Text>
