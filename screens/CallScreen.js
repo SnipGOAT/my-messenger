@@ -59,7 +59,7 @@ export default function CallScreen({ route, navigation }) {
 
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Отправка ICE кандидатов (сериализуем свойства вручную!)
+      // Отправка ICE кандидатов
       pc.onicecandidate = (event) => {
         if (event.candidate && channelRef.current) {
           channelRef.current.send({
@@ -90,10 +90,12 @@ export default function CallScreen({ route, navigation }) {
       });
 
       // Обработка Offer
-      channel.on('broadcast', { event: 'offer' }, async (payload) => {
-        if (payload.sender_id !== user.id) {
-          // Восстанавливаем описание вручную из sdp и type
-          const remoteDesc = { type: payload.type, sdp: payload.sdp };
+      // ВАЖНО: деструктурируем payload из Supabase, чтобы получить наши данные
+      channel.on('broadcast', { event: 'offer' }, async ({ payload: sdPayload }) => {
+        if (sdPayload.sender_id !== user.id) {
+          console.log('Получен offer:', sdPayload);
+          // Теперь берем type и sdp из sdPayload (наши данные), а не из корня
+          const remoteDesc = { type: sdPayload.type, sdp: sdPayload.sdp };
           await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
           
           const answer = await pc.createAnswer();
@@ -105,28 +107,29 @@ export default function CallScreen({ route, navigation }) {
             payload: { 
               sdp: pc.localDescription.sdp, 
               type: pc.localDescription.type,
-              target: payload.sender_id 
+              target: sdPayload.sender_id 
             }
           });
         }
       });
 
       // Обработка Answer
-      channel.on('broadcast', { event: 'answer' }, async (payload) => {
-        if (payload.sender_id !== user.id) {
-          const remoteDesc = { type: payload.type, sdp: payload.sdp };
+      channel.on('broadcast', { event: 'answer' }, async ({ payload: sdPayload }) => {
+        if (sdPayload.sender_id !== user.id) {
+          console.log('Получен answer:', sdPayload);
+          const remoteDesc = { type: sdPayload.type, sdp: sdPayload.sdp };
           await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
         }
       });
 
       // Обработка ICE кандидатов
-      channel.on('broadcast', { event: 'ice-candidate' }, async (payload) => {
-        if (payload.sender_id !== user.id && payload.candidate) {
+      channel.on('broadcast', { event: 'ice-candidate' }, async ({ payload: icePayload }) => {
+        if (icePayload.sender_id !== user.id && icePayload.candidate) {
           try {
             const candidate = new RTCIceCandidate({
-              candidate: payload.candidate,
-              sdpMid: payload.sdpMid,
-              sdpMLineIndex: payload.sdpMLineIndex
+              candidate: icePayload.candidate,
+              sdpMid: icePayload.sdpMid,
+              sdpMLineIndex: icePayload.sdpMLineIndex
             });
             await pc.addIceCandidate(candidate);
           } catch (e) {
