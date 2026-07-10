@@ -1,5 +1,5 @@
 // App.js
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -16,15 +16,9 @@ import ChatInfoScreen from './screens/ChatInfoScreen';
 import ChatMediaScreen from './screens/ChatMediaScreen';
 import CreateStoryScreen from './screens/CreateStoryScreen';
 import StoryViewerScreen from './screens/StoryViewerScreen';
-import StoryViewsScreen from './screens/StoryViewsScreen';
 import ViewProfileScreen from './screens/ViewProfileScreen';
-import EditProfileScreen from './screens/EditProfileScreen';
 import { View, Text, useWindowDimensions, Platform } from 'react-native';
 import { checkSupabaseConnection } from './lib/supabase';
-
-useEffect(() => {
-  checkSupabaseConnection();
-}, []);
 
 const Stack = createNativeStackNavigator();
 
@@ -34,6 +28,11 @@ function AppContent() {
   const isDesktop = Platform.OS === 'web' && width > 768;
 
   usePushNotifications();
+
+  // Проверка подключения к Supabase
+  useEffect(() => {
+    checkSupabaseConnection();
+  }, []);
 
   if (loading) {
     return (
@@ -107,19 +106,9 @@ function AppContent() {
         options={{ headerShown: false }} 
       />
       <Stack.Screen 
-        name="StoryViews" 
-        component={StoryViewsScreen} 
-        options={{ title: 'Просмотры' }} 
-      />
-      <Stack.Screen 
         name="ViewProfile" 
         component={ViewProfileScreen} 
         options={{ title: 'Профиль' }} 
-      />
-      <Stack.Screen 
-        name="EditProfile" 
-        component={EditProfileScreen} 
-        options={{ title: 'Редактировать профиль' }} 
       />
     </Stack.Navigator>
   );

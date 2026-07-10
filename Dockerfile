@@ -1,7 +1,11 @@
 # ============================================
-# Этап 1: Сборка приложения (ИСПОЛЬЗУЕМ NODE 20)
+# Этап 1: Сборка приложения
 # ============================================
 FROM node:20-alpine AS builder
+
+# Объявляем build arguments (передаются из Amvera)
+ARG EXPO_PUBLIC_SUPABASE_URL
+ARG EXPO_PUBLIC_SUPABASE_ANON_KEY
 
 # Устанавливаем рабочую директорию
 WORKDIR /app
@@ -15,7 +19,11 @@ RUN npm ci
 # Копируем весь код
 COPY . .
 
-# Собираем веб-версию
+# Передаем переменные окружения в процесс сборки
+ENV EXPO_PUBLIC_SUPABASE_URL=$EXPO_PUBLIC_SUPABASE_URL
+ENV EXPO_PUBLIC_SUPABASE_ANON_KEY=$EXPO_PUBLIC_SUPABASE_ANON_KEY
+
+# Собираем веб-версию (теперь переменные доступны)
 RUN npx expo export -p web
 
 # ============================================
