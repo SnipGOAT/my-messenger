@@ -59,12 +59,18 @@ export default function CallScreen({ route, navigation }) {
 
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
+      // Отправка ICE кандидатов (сериализуем свойства вручную!)
       pc.onicecandidate = (event) => {
         if (event.candidate && channelRef.current) {
           channelRef.current.send({
             type: 'broadcast',
             event: 'ice-candidate',
-            payload: { candidate: event.candidate, target: callerId || route.params?.targetUserId }
+            payload: { 
+              candidate: event.candidate.candidate, 
+              sdpMid: event.candidate.sdpMid, 
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+              target: callerId === user.id ? route.params?.targetUserId : callerId
+            }
           });
         }
       };
@@ -83,29 +89,46 @@ export default function CallScreen({ route, navigation }) {
         config: { broadcast: { self: true } }
       });
 
+      // Обработка Offer
       channel.on('broadcast', { event: 'offer' }, async (payload) => {
         if (payload.sender_id !== user.id) {
-          await pc.setRemoteDescription(new RTCSessionDescription(payload.offer));
+          // Восстанавливаем описание вручную из sdp и type
+          const remoteDesc = { type: payload.type, sdp: payload.sdp };
+          await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
+          
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
+          
           channel.send({
             type: 'broadcast',
             event: 'answer',
-            payload: { answer, target: payload.sender_id }
+            payload: { 
+              sdp: pc.localDescription.sdp, 
+              type: pc.localDescription.type,
+              target: payload.sender_id 
+            }
           });
         }
       });
 
+      // Обработка Answer
       channel.on('broadcast', { event: 'answer' }, async (payload) => {
         if (payload.sender_id !== user.id) {
-          await pc.setRemoteDescription(new RTCSessionDescription(payload.answer));
+          const remoteDesc = { type: payload.type, sdp: payload.sdp };
+          await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
         }
       });
 
+      // Обработка ICE кандидатов
       channel.on('broadcast', { event: 'ice-candidate' }, async (payload) => {
         if (payload.sender_id !== user.id && payload.candidate) {
           try {
-            await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
+            const candidate = new RTCIceCandidate({
+              candidate: payload.candidate,
+              sdpMid: payload.sdpMid,
+              sdpMLineIndex: payload.sdpMLineIndex
+            });
+            await pc.addIceCandidate(candidate);
           } catch (e) {
             console.error('Ошибка ICE кандидата:', e);
           }
@@ -124,10 +147,16 @@ export default function CallScreen({ route, navigation }) {
       if (callerId === user.id) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
+        
+        // Отправляем offer, явно указывая sdp и type
         channel.send({
           type: 'broadcast',
           event: 'offer',
-          payload: { offer, target: route.params?.targetUserId }
+          payload: { 
+            sdp: pc.localDescription.sdp, 
+            type: pc.localDescription.type,
+            target: route.params?.targetUserId 
+          }
         });
         setStatus('ringing');
       } else {
@@ -136,7 +165,7 @@ export default function CallScreen({ route, navigation }) {
 
     } catch (err) {
       console.error('Ошибка настройки вызова:', err);
-      setError('Не удалось получить доступ к микрофону/камере');
+      setError('Не удалось получить доступ к микрофону/камере. Проверьте разрешения браузера.');
       setStatus('ended');
     }
   };
@@ -235,7 +264,7 @@ export default function CallScreen({ route, navigation }) {
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
@@ -265,7 +294,7 @@ const styles = StyleSheet.create({
   header: { alignItems: 'center' },
   title: { color: '#fff', fontSize: 28, fontWeight: 'bold', marginBottom: 10 },
   status: { color: 'rgba(255,255,255,0.8)', fontSize: 16 },
-  error: { color: '#FF3B30', textAlign: 'center', marginTop: 20, fontSize: 14 },
+  error: { color: '#FF3B30', textAlign: 'center', marginTop: 20, fontSize: 14, paddingHorizontal: 20 },
   controls: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', paddingBottom: 40 },
   controlBtn: { alignItems: 'center', width: 80 },
   controlBtnActive: { opacity: 0.5 },
