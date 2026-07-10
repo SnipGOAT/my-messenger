@@ -44,7 +44,6 @@ export default function CallScreen({ route, navigation }) {
   const timerRef = useRef(null);
   const pendingIceRef = useRef([]);
   const remoteDescSetRef = useRef(false);
-  const audioContextRef = useRef(null);
 
   useEffect(() => {
     initCall();
@@ -81,6 +80,16 @@ export default function CallScreen({ route, navigation }) {
           },
           video: isVideoCall ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false
         });
+        
+        // ДИАГНОСТИКА: Проверяем локальный стрим
+        console.log('=== ЛОКАЛЬНЫЙ СТРИМ ===');
+        console.log('Треки:', stream.getTracks().map(t => ({
+          kind: t.kind,
+          enabled: t.enabled,
+          label: t.label,
+          readyState: t.readyState
+        })));
+        
       } catch (mediaErr) {
         console.error('Ошибка медиа:', mediaErr);
         if (mediaErr.name === 'NotReadableError') {
@@ -120,7 +129,22 @@ export default function CallScreen({ route, navigation }) {
       });
       pcRef.current = pc;
 
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      // ДИАГНОСТИКА: Проверяем добавление треков
+      stream.getTracks().forEach(track => {
+        const sender = pc.addTrack(track, stream);
+        console.log('Добавлен трек:', track.kind, 'Sender:', sender);
+      });
+
+      // ДИАГНОСТИКА: Логируем SDP
+      pc.onnegotiationneeded = async () => {
+        console.log('=== NEGOTIATION NEEDED ===');
+        const localDesc = pc.localDescription;
+        if (localDesc) {
+          console.log('Local SDP type:', localDesc.type);
+          console.log('Local SDP содержит audio:', localDesc.sdp.includes('audio'));
+          console.log('Local SDP содержит video:', localDesc.sdp.includes('video'));
+        }
+      };
 
       pc.onicecandidate = (event) => {
         if (event.candidate && channelRef.current) {
@@ -159,9 +183,12 @@ export default function CallScreen({ route, navigation }) {
       };
 
       pc.ontrack = (event) => {
-        console.log('Получен трек:', event.track.kind);
+        console.log('=== ПОЛУЧЕН ТРЕК ===');
+        console.log('Трек kind:', event.track.kind);
         console.log('Трек enabled:', event.track.enabled);
         console.log('Трек muted:', event.track.muted);
+        console.log('Трек id:', event.track.id);
+        console.log('Стримы:', event.streams.length);
         
         if (Platform.OS === 'web') {
           remoteStreamRef.current = event.streams[0];
@@ -173,14 +200,13 @@ export default function CallScreen({ route, navigation }) {
             });
           }
           
-          // НОВОЕ: Создаем audio элемент динамически
           if (event.track.kind === 'audio') {
             console.log('Создаем audio элемент для удаленного звука');
             
             const audio = document.createElement('audio');
             audio.srcObject = event.streams[0];
             audio.autoplay = true;
-            audio.controls = true; // Показываем controls для отладки
+            audio.controls = true;
             audio.style.position = 'fixed';
             audio.style.bottom = '100px';
             audio.style.left = '50%';
@@ -191,7 +217,6 @@ export default function CallScreen({ route, navigation }) {
             document.body.appendChild(audio);
             setAudioElement(audio);
             
-            // Пытаемся запустить
             audio.play().then(() => {
               console.log('✅ Audio play() успешен');
             }).catch(err => {
@@ -199,10 +224,19 @@ export default function CallScreen({ route, navigation }) {
               setError('Нажмите на аудио-плеер ниже для включения звука');
             });
             
-            // Отслеживаем состояние
             audio.onplay = () => console.log('Audio playing');
             audio.onpause = () => console.log('Audio paused');
             audio.onvolumechange = () => console.log('Volume changed:', audio.volume);
+            
+            // ДИАГНОСТИКА: Проверяем состояние трека через 1 секунду
+            setTimeout(() => {
+              console.log('=== ЧЕРЕЗ 1 СЕКУНДУ ===');
+              console.log('Трек enabled:', event.track.enabled);
+              console.log('Трек muted:', event.track.muted);
+              console.log('Audio element paused:', audio.paused);
+              console.log('Audio element muted:', audio.muted);
+              console.log('Audio element volume:', audio.volume);
+            }, 1000);
           }
         }
         
@@ -216,6 +250,11 @@ export default function CallScreen({ route, navigation }) {
 
       channel.on('broadcast', { event: 'offer' }, async ({ payload: sdPayload }) => {
         if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
+          console.log('=== ПОЛУЧЕН OFFER ===');
+          console.log('SDP type:', sdPayload.type);
+          console.log('SDP содержит audio:', sdPayload.sdp.includes('audio'));
+          console.log('SDP содержит video:', sdPayload.sdp.includes('video'));
+          
           try {
             await pc.setRemoteDescription(new RTCSessionDescription({
               type: sdPayload.type,
@@ -225,6 +264,10 @@ export default function CallScreen({ route, navigation }) {
             await applyPendingIce();
 
             const answer = await pc.createAnswer();
+            console.log('=== СОЗДАН ANSWER ===');
+            console.log('Answer SDP type:', answer.type);
+            console.log('Answer SDP содержит audio:', answer.sdp.includes('audio'));
+            
             await pc.setLocalDescription(answer);
             
             channel.send({
@@ -244,6 +287,10 @@ export default function CallScreen({ route, navigation }) {
 
       channel.on('broadcast', { event: 'answer' }, async ({ payload: sdPayload }) => {
         if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
+          console.log('=== ПОЛУЧЕН ANSWER ===');
+          console.log('SDP type:', sdPayload.type);
+          console.log('SDP содержит audio:', sdPayload.sdp.includes('audio'));
+          
           try {
             await pc.setRemoteDescription(new RTCSessionDescription({
               type: sdPayload.type,
@@ -286,7 +333,12 @@ export default function CallScreen({ route, navigation }) {
       channelRef.current = channel;
 
       if (route.params?.callerId === user.id) {
+        console.log('=== СОЗДАЕМ OFFER ===');
         const offer = await pc.createOffer();
+        console.log('Offer SDP type:', offer.type);
+        console.log('Offer SDP содержит audio:', offer.sdp.includes('audio'));
+        console.log('Offer SDP содержит video:', offer.sdp.includes('video'));
+        
         await pc.setLocalDescription(offer);
         
         channel.send({
@@ -327,6 +379,7 @@ export default function CallScreen({ route, navigation }) {
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setIsMuted(!isMuted);
+        console.log('Микрофон:', audioTrack.enabled ? 'включен' : 'выключен');
       }
     }
   };
@@ -352,12 +405,8 @@ export default function CallScreen({ route, navigation }) {
     if (pcRef.current) {
       pcRef.current.close();
     }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-    }
     if (timerRef.current) clearInterval(timerRef.current);
     
-    // Удаляем audio элемент
     if (audioElement) {
       audioElement.remove();
     }
@@ -404,14 +453,14 @@ export default function CallScreen({ route, navigation }) {
           <View style={styles.controls}>
             {hasAudio && (
               <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
-                <Text style={styles.controlIcon}>{isMuted ? '🔇' : '🎤'}</Text>
+                <Text style={styles.controlIcon}>{isMuted ? '' : '🎤'}</Text>
                 <Text style={styles.controlText}>{isMuted ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
