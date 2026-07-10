@@ -25,7 +25,6 @@ const Stack = createNativeStackNavigator();
 const getDocumentTitle = (route) => {
   if (!route) return 'MAX 2.0';
 
-  // Маппинг названий экранов на заголовки
   const titleMap = {
     'Auth': 'Вход — MAX 2.0',
     'ChatList': 'Мои чаты — MAX 2.0',
@@ -43,12 +42,11 @@ const getDocumentTitle = (route) => {
   return titleMap[route.name] || 'MAX 2.0';
 };
 
-// Функция для получения текущего route из состояния навигации
+// Функция для получения текущего route
 const getActiveRoute = (state) => {
   if (!state) return null;
   const route = state.routes[state.index];
   if (route.state) {
-    // Рекурсивно идём в вложенные навигаторы
     return getActiveRoute(route.state);
   }
   return route;
@@ -69,14 +67,14 @@ function AppContent() {
     }
   }, []);
 
-  // Обработчик изменения состояния навигации
+  // Обработчик изменения навигации
   const handleStateChange = (state) => {
     if (typeof document === 'undefined' || !state) return;
     const route = getActiveRoute(state);
     document.title = getDocumentTitle(route);
   };
 
-  // Обработчик первого рендера (когда ref уже доступен)
+  // При готовности навигации
   const handleReady = () => {
     if (typeof document === 'undefined' || !navigationRef.current) return;
     const state = navigationRef.current.getRootState();
@@ -92,13 +90,13 @@ function AppContent() {
     );
   }
 
-  if (!session) {
-    return (
-      <NavigationContainer 
-        ref={navigationRef}
-        onStateChange={handleStateChange}
-        onReady={handleReady}
-      >
+  return (
+    <NavigationContainer 
+      ref={navigationRef}
+      onStateChange={handleStateChange}
+      onReady={handleReady}
+    >
+      {!session ? (
         <Stack.Navigator>
           <Stack.Screen 
             name="Auth" 
@@ -106,72 +104,62 @@ function AppContent() {
             options={{ headerShown: false }} 
           />
         </Stack.Navigator>
-      </NavigationContainer>
-    );
-  }
-
-  if (isDesktop) {
-    return <DesktopLayout />;
-  }
-
-  return (
-    <NavigationContainer 
-      ref={navigationRef}
-      onStateChange={handleStateChange}
-      onReady={handleReady}
-    >
-      <Stack.Navigator>
-        <Stack.Screen 
-          name="ChatList" 
-          component={ChatListScreen} 
-          options={{ title: 'Мои чаты' }} 
-        />
-        <Stack.Screen 
-          name="Chat" 
-          component={ChatScreen} 
-          options={({ route }) => ({ title: route.params?.title || 'Чат' })} 
-        />
-        <Stack.Screen 
-          name="NewChat" 
-          component={NewChatScreen} 
-          options={{ title: 'Новый чат' }} 
-        />
-        <Stack.Screen 
-          name="Settings" 
-          component={SettingsScreen} 
-          options={{ title: 'Настройки' }} 
-        />
-        <Stack.Screen 
-          name="CreateGroup" 
-          component={CreateGroupScreen} 
-          options={{ title: 'Новая группа' }} 
-        />
-        <Stack.Screen 
-          name="ChatInfo" 
-          component={ChatInfoScreen} 
-          options={{ title: 'Информация о чате' }} 
-        />
-        <Stack.Screen 
-          name="ChatMedia" 
-          component={ChatMediaScreen} 
-          options={{ title: 'Медиа' }} 
-        />
-        <Stack.Screen 
-          name="CreateStory" 
-          component={CreateStoryScreen} 
-          options={{ title: 'Новый статус' }} 
-        />
-        <Stack.Screen 
-          name="StoryViewer" 
-          component={StoryViewerScreen} 
-          options={{ headerShown: false }} 
-        />
-        <Stack.Screen 
-          name="ViewProfile" 
-          component={ViewProfileScreen} 
-          options={{ title: 'Профиль' }} 
-        />
-      </Stack.Navigator>
+      ) : isDesktop ? (
+        <DesktopLayout />
+      ) : (
+        <Stack.Navigator>
+          <Stack.Screen 
+            name="ChatList" 
+            component={ChatListScreen} 
+            options={{ title: 'Мои чаты' }} 
+          />
+          <Stack.Screen 
+            name="Chat" 
+            component={ChatScreen} 
+            options={({ route }) => ({ title: route.params?.title || 'Чат' })} 
+          />
+          <Stack.Screen 
+            name="NewChat" 
+            component={NewChatScreen} 
+            options={{ title: 'Новый чат' }} 
+          />
+          <Stack.Screen 
+            name="Settings" 
+            component={SettingsScreen} 
+            options={{ title: 'Настройки' }} 
+          />
+          <Stack.Screen 
+            name="CreateGroup" 
+            component={CreateGroupScreen} 
+            options={{ title: 'Новая группа' }} 
+          />
+          <Stack.Screen 
+            name="ChatInfo" 
+            component={ChatInfoScreen} 
+            options={{ title: 'Информация о чате' }} 
+          />
+          <Stack.Screen 
+            name="ChatMedia" 
+            component={ChatMediaScreen} 
+            options={{ title: 'Медиа' }} 
+          />
+          <Stack.Screen 
+            name="CreateStory" 
+            component={CreateStoryScreen} 
+            options={{ title: 'Новый статус' }} 
+          />
+          <Stack.Screen 
+            name="StoryViewer" 
+            component={StoryViewerScreen} 
+            options={{ headerShown: false }} 
+          />
+          <Stack.Screen 
+            name="ViewProfile" 
+            component={ViewProfileScreen} 
+            options={{ title: 'Профиль' }} 
+          />
+        </Stack.Navigator>
+      )}
     </NavigationContainer>
   );
 }
