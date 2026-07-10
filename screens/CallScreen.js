@@ -6,6 +6,8 @@ import { useTheme } from '../contexts/ThemeContext';
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
   {
     urls: 'turn:freestun.net:3478',
     username: 'free',
@@ -18,6 +20,11 @@ const ICE_SERVERS = [
   },
   {
     urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:80?transport=tcp',
     username: 'openrelayproject',
     credential: 'openrelayproject'
   }
@@ -44,6 +51,7 @@ export default function CallScreen({ route, navigation }) {
   const timerRef = useRef(null);
   const pendingIceRef = useRef([]);
   const remoteDescSetRef = useRef(false);
+  const statsIntervalRef = useRef(null);
 
   useEffect(() => {
     initCall();
@@ -65,6 +73,29 @@ export default function CallScreen({ route, navigation }) {
     }
   };
 
+  // ДИАГНОСТИКА: Проверяем статистику WebRTC
+  const checkWebRTCStats = () => {
+    if (!pcRef.current) return;
+    
+    pcRef.current.getStats().then(stats => {
+      stats.forEach(report => {
+        if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+          console.log('=== WEBRTC STATS (AUDIO) ===');
+          console.log('Packets received:', report.packetsReceived);
+          console.log('Packets lost:', report.packetsLost);
+          console.log('Bytes received:', report.bytesReceived);
+          console.log('Jitter:', report.jitter);
+          
+          if (report.packetsReceived === 0) {
+            console.error('❌ Аудио-пакеты НЕ получаются!');
+          } else {
+            console.log('✅ Аудио-пакеты получаются:', report.packetsReceived);
+          }
+        }
+      });
+    });
+  };
+
   const initCall = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -81,7 +112,6 @@ export default function CallScreen({ route, navigation }) {
           video: isVideoCall ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false
         });
         
-        // ДИАГНОСТИКА: Проверяем локальный стрим
         console.log('=== ЛОКАЛЬНЫЙ СТРИМ ===');
         console.log('Треки:', stream.getTracks().map(t => ({
           kind: t.kind,
@@ -120,31 +150,20 @@ export default function CallScreen({ route, navigation }) {
         localVideoRef.current.srcObject = stream;
       }
 
+      // ИСПРАВЛЕНИЕ: Убираем iceTransportPolicy: 'relay', используем 'all'
       const pc = new RTCPeerConnection({
         iceServers: ICE_SERVERS,
         iceCandidatePoolSize: 10,
-        iceTransportPolicy: 'relay',
+        iceTransportPolicy: 'all', // ВАЖНО: 'all' вместо 'relay'
         bundlePolicy: 'max-bundle',
         rtcpMuxPolicy: 'require'
       });
       pcRef.current = pc;
 
-      // ДИАГНОСТИКА: Проверяем добавление треков
       stream.getTracks().forEach(track => {
         const sender = pc.addTrack(track, stream);
         console.log('Добавлен трек:', track.kind, 'Sender:', sender);
       });
-
-      // ДИАГНОСТИКА: Логируем SDP
-      pc.onnegotiationneeded = async () => {
-        console.log('=== NEGOTIATION NEEDED ===');
-        const localDesc = pc.localDescription;
-        if (localDesc) {
-          console.log('Local SDP type:', localDesc.type);
-          console.log('Local SDP содержит audio:', localDesc.sdp.includes('audio'));
-          console.log('Local SDP содержит video:', localDesc.sdp.includes('video'));
-        }
-      };
 
       pc.onicecandidate = (event) => {
         if (event.candidate && channelRef.current) {
@@ -187,8 +206,6 @@ export default function CallScreen({ route, navigation }) {
         console.log('Трек kind:', event.track.kind);
         console.log('Трек enabled:', event.track.enabled);
         console.log('Трек muted:', event.track.muted);
-        console.log('Трек id:', event.track.id);
-        console.log('Стримы:', event.streams.length);
         
         if (Platform.OS === 'web') {
           remoteStreamRef.current = event.streams[0];
@@ -201,8 +218,6 @@ export default function CallScreen({ route, navigation }) {
           }
           
           if (event.track.kind === 'audio') {
-            console.log('Создаем audio элемент для удаленного звука');
-            
             const audio = document.createElement('audio');
             audio.srcObject = event.streams[0];
             audio.autoplay = true;
@@ -221,22 +236,10 @@ export default function CallScreen({ route, navigation }) {
               console.log('✅ Audio play() успешен');
             }).catch(err => {
               console.error('❌ Audio play() ошибка:', err);
-              setError('Нажмите на аудио-плеер ниже для включения звука');
             });
             
-            audio.onplay = () => console.log('Audio playing');
-            audio.onpause = () => console.log('Audio paused');
-            audio.onvolumechange = () => console.log('Volume changed:', audio.volume);
-            
-            // ДИАГНОСТИКА: Проверяем состояние трека через 1 секунду
-            setTimeout(() => {
-              console.log('=== ЧЕРЕЗ 1 СЕКУНДУ ===');
-              console.log('Трек enabled:', event.track.enabled);
-              console.log('Трек muted:', event.track.muted);
-              console.log('Audio element paused:', audio.paused);
-              console.log('Audio element muted:', audio.muted);
-              console.log('Audio element volume:', audio.volume);
-            }, 1000);
+            // Запускаем диагностику статистики каждые 3 секунды
+            statsIntervalRef.current = setInterval(checkWebRTCStats, 3000);
           }
         }
         
@@ -250,11 +253,6 @@ export default function CallScreen({ route, navigation }) {
 
       channel.on('broadcast', { event: 'offer' }, async ({ payload: sdPayload }) => {
         if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
-          console.log('=== ПОЛУЧЕН OFFER ===');
-          console.log('SDP type:', sdPayload.type);
-          console.log('SDP содержит audio:', sdPayload.sdp.includes('audio'));
-          console.log('SDP содержит video:', sdPayload.sdp.includes('video'));
-          
           try {
             await pc.setRemoteDescription(new RTCSessionDescription({
               type: sdPayload.type,
@@ -264,10 +262,6 @@ export default function CallScreen({ route, navigation }) {
             await applyPendingIce();
 
             const answer = await pc.createAnswer();
-            console.log('=== СОЗДАН ANSWER ===');
-            console.log('Answer SDP type:', answer.type);
-            console.log('Answer SDP содержит audio:', answer.sdp.includes('audio'));
-            
             await pc.setLocalDescription(answer);
             
             channel.send({
@@ -287,10 +281,6 @@ export default function CallScreen({ route, navigation }) {
 
       channel.on('broadcast', { event: 'answer' }, async ({ payload: sdPayload }) => {
         if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
-          console.log('=== ПОЛУЧЕН ANSWER ===');
-          console.log('SDP type:', sdPayload.type);
-          console.log('SDP содержит audio:', sdPayload.sdp.includes('audio'));
-          
           try {
             await pc.setRemoteDescription(new RTCSessionDescription({
               type: sdPayload.type,
@@ -333,12 +323,7 @@ export default function CallScreen({ route, navigation }) {
       channelRef.current = channel;
 
       if (route.params?.callerId === user.id) {
-        console.log('=== СОЗДАЕМ OFFER ===');
         const offer = await pc.createOffer();
-        console.log('Offer SDP type:', offer.type);
-        console.log('Offer SDP содержит audio:', offer.sdp.includes('audio'));
-        console.log('Offer SDP содержит video:', offer.sdp.includes('video'));
-        
         await pc.setLocalDescription(offer);
         
         channel.send({
@@ -379,7 +364,6 @@ export default function CallScreen({ route, navigation }) {
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setIsMuted(!isMuted);
-        console.log('Микрофон:', audioTrack.enabled ? 'включен' : 'выключен');
       }
     }
   };
@@ -406,6 +390,7 @@ export default function CallScreen({ route, navigation }) {
       pcRef.current.close();
     }
     if (timerRef.current) clearInterval(timerRef.current);
+    if (statsIntervalRef.current) clearInterval(statsIntervalRef.current);
     
     if (audioElement) {
       audioElement.remove();
@@ -446,21 +431,21 @@ export default function CallScreen({ route, navigation }) {
         {error && <Text style={styles.error}>{error}</Text>}
         
         {!hasAudio && status === 'connected' && (
-          <Text style={styles.warning}>⚠️ Без звука</Text>
+          <Text style={styles.warning}>️ Без звука</Text>
         )}
 
         {status === 'connected' && (
           <View style={styles.controls}>
             {hasAudio && (
               <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
-                <Text style={styles.controlIcon}>{isMuted ? '' : '🎤'}</Text>
+                <Text style={styles.controlIcon}>{isMuted ? '🔇' : ''}</Text>
                 <Text style={styles.controlText}>{isMuted ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '' : '📹'}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : ''}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
