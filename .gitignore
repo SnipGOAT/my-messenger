@@ -1,9 +1,24 @@
 # Зависимости
 node_modules/
 .expo/
+
+# Сборка
 dist/
-npm-debug.*
-*.log
+web-build/
+
+# Переменные окружения (СЕКРЕТЫ!)
+.env
+.env.local
+.env.*.local
+
+# Логи
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
 
 # IDE
 .vscode/
@@ -11,22 +26,8 @@ npm-debug.*
 *.swp
 *.swo
 
-# macOS
-.DS_Store
+# Тесты
+coverage/
 
-# Windows
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# Системные папки (исключаем из сборки)
-AppData/
-**/AppData/**
-
-# Кэши
-.cache/
-**/.cache/**
-
-# Временные файлы
-*.tmp
-*.temp
+# EAS
+.eas/

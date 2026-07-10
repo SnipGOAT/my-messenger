@@ -1,103 +1,113 @@
 // components/DesktopLayout.js
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text } from 'react-native';
 import ChatListScreen from '../screens/ChatListScreen';
 import ChatScreen from '../screens/ChatScreen';
+import SettingsScreen from '../screens/SettingsScreen';
+import CreateGroupScreen from '../screens/CreateGroupScreen';
 import NewChatScreen from '../screens/NewChatScreen';
+import ChatInfoScreen from '../screens/ChatInfoScreen';
+import ChatMediaScreen from '../screens/ChatMediaScreen';
+import CreateStoryScreen from '../screens/CreateStoryScreen';
+import StoryViewerScreen from '../screens/StoryViewerScreen';
+import ViewProfileScreen from '../screens/ViewProfileScreen';
+import StoryViewsScreen from '../screens/StoryViewsScreen';
+import EditProfileScreen from '../screens/EditProfileScreen';
 
 export default function DesktopLayout() {
-  const [selectedChat, setSelectedChat] = useState(null);
-  const [showNewChat, setShowNewChat] = useState(false); // Новое состояние
+  const [activeChatId, setActiveChatId] = useState(null);
+  const [activeScreen, setActiveScreen] = useState('list');
+  const [chatTitle, setChatTitle] = useState('');
+  const [chatInfoParams, setChatInfoParams] = useState(null);
+  const [chatMediaParams, setChatMediaParams] = useState(null);
+  const [storyViewerParams, setStoryViewerParams] = useState(null);
+  const [viewProfileParams, setViewProfileParams] = useState(null);
+  const [storyViewsParams, setStoryViewsParams] = useState(null);
+  const [editProfileParams, setEditProfileParams] = useState(null);
 
-  const fakeNavigation = {
+  const navigation = {
     navigate: (screen, params) => {
-      console.log('🧭 Навигация:', screen, params);
       if (screen === 'Chat') {
-        setSelectedChat(params);
-        setShowNewChat(false);
+        setActiveChatId(params.chatId);
+        setChatTitle(params.title || 'Чат');
+        setActiveScreen('chat');
+      } else if (screen === 'Settings') {
+        setActiveScreen('settings');
+      } else if (screen === 'CreateGroup') {
+        setActiveScreen('createGroup');
       } else if (screen === 'NewChat') {
-        setShowNewChat(true);
-        setSelectedChat(null);
+        setActiveScreen('newChat');
+      } else if (screen === 'ChatInfo') {
+        setActiveScreen('chatInfo');
+        setChatInfoParams(params);
+      } else if (screen === 'ChatMedia') {
+        setActiveScreen('chatMedia');
+        setChatMediaParams(params);
+      } else if (screen === 'CreateStory') {
+        setActiveScreen('createStory');
+      } else if (screen === 'StoryViewer') {
+        setActiveScreen('storyViewer');
+        setStoryViewerParams(params);
+      } else if (screen === 'ViewProfile') {
+        setActiveScreen('viewProfile');
+        setViewProfileParams(params);
+      } else if (screen === 'StoryViews') {
+        setActiveScreen('storyViews');
+        setStoryViewsParams(params);
+      } else if (screen === 'EditProfile') {
+        setActiveScreen('editProfile');
+        setEditProfileParams(params);
       }
     },
-    setOptions: () => {},
-    addListener: () => {},
     goBack: () => {
-      setSelectedChat(null);
-      setShowNewChat(false);
-    },
-  };
-
-  const handleBack = () => {
-    setSelectedChat(null);
-    setShowNewChat(false);
+      setActiveScreen('list');
+      setActiveChatId(null);
+      setChatInfoParams(null);
+      setChatMediaParams(null);
+      setStoryViewerParams(null);
+      setViewProfileParams(null);
+      setStoryViewsParams(null);
+      setEditProfileParams(null);
+    }
   };
 
   return (
-    <View style={styles.container}>
-      {/* ЛЕВАЯ КОЛОНКА */}
-      <View style={styles.sidebar}>
-        <View style={styles.sidebarHeader}>
-          <Text style={styles.sidebarTitle}>Мои чаты</Text>
-        </View>
-        <View style={styles.sidebarContent}>
-          <ChatListScreen navigation={fakeNavigation} />
-        </View>
+    <View style={{ flexDirection: 'row', flex: 1, height: '100%' }}>
+      {/* Левая панель (Список чатов) */}
+      <View style={{ width: 350, borderRightWidth: 1, borderColor: '#ccc', height: '100%' }}>
+        <ChatListScreen navigation={navigation} />
       </View>
 
-      {/* ПРАВАЯ КОЛОНКА */}
-      <View style={styles.main}>
-        {selectedChat ? (
-          <>
-            <View style={styles.chatHeader}>
-              <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-                <Text style={styles.backButtonText}>←</Text>
-              </TouchableOpacity>
-              <Text style={styles.chatTitle}>{selectedChat.title}</Text>
-            </View>
-            <View style={styles.chatContent}>
-              <ChatScreen 
-                route={{ params: selectedChat }} 
-                navigation={{ goBack: handleBack, setOptions: () => {} }} 
-              />
-            </View>
-          </>
-        ) : showNewChat ? (
-          <>
-            <View style={styles.chatHeader}>
-              <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-                <Text style={styles.backButtonText}>←</Text>
-              </TouchableOpacity>
-              <Text style={styles.chatTitle}>Новый чат</Text>
-            </View>
-            <View style={styles.chatContent}>
-              <NewChatScreen 
-                navigation={fakeNavigation} 
-              />
-            </View>
-          </>
+      {/* Правая панель */}
+      <View style={{ flex: 1, height: '100%' }}>
+        {activeScreen === 'chat' && activeChatId ? (
+          <ChatScreen route={{ params: { chatId: activeChatId, title: chatTitle } }} navigation={navigation} />
+        ) : activeScreen === 'settings' ? (
+          <SettingsScreen navigation={navigation} />
+        ) : activeScreen === 'createGroup' ? (
+          <CreateGroupScreen navigation={navigation} />
+        ) : activeScreen === 'newChat' ? (
+          <NewChatScreen navigation={navigation} />
+        ) : activeScreen === 'chatInfo' && chatInfoParams ? (
+          <ChatInfoScreen route={{ params: chatInfoParams }} navigation={navigation} />
+        ) : activeScreen === 'chatMedia' && chatMediaParams ? (
+          <ChatMediaScreen route={{ params: chatMediaParams }} navigation={navigation} />
+        ) : activeScreen === 'createStory' ? (
+          <CreateStoryScreen navigation={navigation} />
+        ) : activeScreen === 'storyViewer' && storyViewerParams ? (
+          <StoryViewerScreen route={{ params: storyViewerParams }} navigation={navigation} />
+        ) : activeScreen === 'viewProfile' && viewProfileParams ? (
+          <ViewProfileScreen route={{ params: viewProfileParams }} navigation={navigation} />
+        ) : activeScreen === 'storyViews' && storyViewsParams ? (
+          <StoryViewsScreen route={{ params: storyViewsParams }} navigation={navigation} />
+        ) : activeScreen === 'editProfile' && editProfileParams ? (
+          <EditProfileScreen route={{ params: editProfileParams }} navigation={navigation} />
         ) : (
-          <View style={styles.placeholder}>
-            <Text style={styles.placeholderText}>Выберите чат слева или нажмите 🔍 для поиска</Text>
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
+            <Text style={{ fontSize: 18, color: '#888' }}>Выберите чат или откройте настройки</Text>
           </View>
         )}
       </View>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, flexDirection: 'row', backgroundColor: '#fff' },
-  sidebar: { width: 350, borderRightWidth: 1, borderColor: '#e0e0e0', backgroundColor: '#f8f8f8' },
-  sidebarHeader: { padding: 20, borderBottomWidth: 1, borderColor: '#e0e0e0', backgroundColor: '#fff' },
-  sidebarTitle: { fontSize: 24, fontWeight: 'bold' },
-  sidebarContent: { flex: 1 },
-  main: { flex: 1, flexDirection: 'column', backgroundColor: '#fff' },
-  chatHeader: { padding: 20, borderBottomWidth: 1, borderColor: '#e0e0e0', flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff' },
-  backButton: { marginRight: 15, padding: 5 },
-  backButtonText: { fontSize: 24, color: '#007AFF' },
-  chatTitle: { fontSize: 20, fontWeight: '600' },
-  chatContent: { flex: 1 },
-  placeholder: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' },
-  placeholderText: { fontSize: 18, color: '#888' },
-});

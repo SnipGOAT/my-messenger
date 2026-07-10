@@ -31,11 +31,8 @@ export const ThemeProvider = ({ children }) => {
     : themeMode === 'dark';
 
   const toggleTheme = () => {
-    setThemeMode(prev => {
-      if (prev === 'light') return 'dark';
-      if (prev === 'dark') return 'system';
-      return 'light';
-    });
+    // Просто меняем светлую на темную и наоборот
+    setThemeMode(prev => (prev === 'light' ? 'dark' : 'light'));
   };
 
   const colors = {

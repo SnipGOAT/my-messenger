@@ -1,164 +1,110 @@
 // screens/NewChatScreen.js
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, FlatList } from 'react-native';
+import { View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet, Image, Alert } from 'react-native';
 import { supabase } from '../lib/supabase';
+import { useTheme } from '../contexts/ThemeContext';
 
 export default function NewChatScreen({ navigation }) {
+  const { colors } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  const [loading, setLoading] = useState(false);
 
-  // Поиск пользователя по username
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
-
-    setLoading(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      // Ищем пользователей, у которых username содержит введенную строку (регистронезависимо)
-      const { data: profiles, error } = await supabase
-        .from('profiles')
-        .select('id, username, avatar_url')
-        .ilike('username', `%${searchQuery}%`) // ilike = case-insensitive LIKE
-        .neq('id', user.id) // Исключаем самого пользователя
-        .limit(10); // Показываем максимум 10 результатов
-
-      if (error) throw error;
-
-      setSearchResults(profiles || []);
-    } catch (error) {
-      Alert.alert('Ошибка поиска', error.message);
-    } finally {
-      setLoading(false);
+  const searchUsers = async (query) => {
+    setSearchQuery(query);
+    if (query.trim().length < 2) {
+      setSearchResults([]);
+      return;
     }
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data } = await supabase
+      .from('profiles')
+      .select('id, username, avatar_url')
+      .ilike('username', `%${query}%`)
+      .neq('id', user.id)
+      .limit(10);
+
+    setSearchResults(data || []);
   };
 
-  // Создание или открытие чата с найденным пользователем
   const startChat = async (otherUser) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    setLoading(true);
-    try {
-      // 1. Проверяем, есть ли уже чат между этими двумя пользователями
-      const { data: existingMemberships } = await supabase
-        .from('chat_members')
-        .select('chat_id')
-        .eq('user_id', user.id);
+    // Проверяем, есть ли уже чат с этим пользователем
+    const { data: existingMemberships } = await supabase
+      .from('chat_members')
+      .select('chat_id')
+      .eq('user_id', user.id);
 
-      const existingChatIds = existingMemberships?.map(m => m.chat_id) || [];
-
-      if (existingChatIds.length > 0) {
-        // Ищем чат, где есть оба пользователя
+    if (existingMemberships) {
+      const chatIds = existingMemberships.map(m => m.chat_id);
+      if (chatIds.length > 0) {
         const { data: existingChats } = await supabase
           .from('chat_members')
           .select('chat_id')
-          .in('chat_id', existingChatIds)
+          .in('chat_id', chatIds)
           .eq('user_id', otherUser.id);
 
         if (existingChats && existingChats.length > 0) {
-          // Чат уже существует, просто открываем его
-          const chatId = existingChats[0].chat_id;
-          
-          // Загружаем название чата (имя собеседника)
-          const { data: chatData } = await supabase
-            .from('chats')
-            .select('id')
-            .eq('id', chatId)
-            .single();
-
-          navigation.navigate('Chat', { 
-            chatId: chatId, 
-            title: otherUser.username 
-          });
-          setLoading(false);
+          const commonChatId = existingChats[0].chat_id;
+          navigation.navigate('Chat', { chatId: commonChatId, title: otherUser.username });
           return;
         }
       }
-
-      // 2. Если чата нет, создаем новый
-      const { data: newChat, error: chatError } = await supabase
-        .from('chats')
-        .insert({ is_group: false })
-        .select()
-        .single();
-
-      if (chatError) throw chatError;
-
-      // 3. Добавляем обоих пользователей в чат
-      const { error: memberError } = await supabase
-        .from('chat_members')
-        .insert([
-          { chat_id: newChat.id, user_id: user.id },
-          { chat_id: newChat.id, user_id: otherUser.id }
-        ]);
-
-      if (memberError) throw memberError;
-
-      // 4. Открываем новый чат
-      navigation.navigate('Chat', { 
-        chatId: newChat.id, 
-        title: otherUser.username 
-      });
-
-    } catch (error) {
-      Alert.alert('Ошибка создания чата', error.message);
-    } finally {
-      setLoading(false);
     }
+
+    // Создаем новый чат
+    const { data: newChat, error: chatError } = await supabase
+      .from('chats')
+      .insert({ is_group: false })
+      .select()
+      .single();
+
+    if (chatError) return Alert.alert('Ошибка', chatError.message);
+
+    await supabase.from('chat_members').insert([
+      { chat_id: newChat.id, user_id: user.id },
+      { chat_id: newChat.id, user_id: otherUser.id }
+    ]);
+
+    navigation.navigate('Chat', { chatId: newChat.id, title: otherUser.username });
   };
 
   return (
-    <View style={styles.container}>
-      {/* Поле поиска */}
-      <View style={styles.searchContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="Введите username..."
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          autoCapitalize="none"
-        />
-        <TouchableOpacity 
-          style={styles.searchButton} 
-          onPress={handleSearch}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.searchButtonText}>🔍</Text>
-          )}
-        </TouchableOpacity>
-      </View>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <TextInput
+        style={[styles.searchInput, { backgroundColor: colors.inputBackground, color: colors.text, borderColor: colors.border }]}
+        placeholder="Поиск по имени пользователя..."
+        placeholderTextColor={colors.textSecondary}
+        value={searchQuery}
+        onChangeText={searchUsers}
+        autoFocus
+      />
 
-      {/* Результаты поиска */}
       <FlatList
         data={searchResults}
         keyExtractor={item => item.id}
         renderItem={({ item }) => (
           <TouchableOpacity 
-            style={styles.userItem}
+            style={[styles.userItem, { borderBottomColor: colors.border }]} 
             onPress={() => startChat(item)}
           >
             {item.avatar_url ? (
-              <Image source={{ uri: item.avatar_url }} style={styles.userAvatar} />
+              <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
             ) : (
-              <View style={styles.userAvatarPlaceholder}>
-                <Text style={styles.userAvatarText}>👤</Text>
+              <View style={[styles.avatarPlaceholder, { backgroundColor: colors.inputBackground }]}>
+                <Text>👤</Text>
               </View>
             )}
-            <View style={styles.userInfo}>
-              <Text style={styles.userName}>{item.username}</Text>
-              <Text style={styles.userHint}>Нажмите, чтобы начать чат</Text>
-            </View>
+            <Text style={[styles.username, { color: colors.text }]}>{item.username}</Text>
           </TouchableOpacity>
         )}
         ListEmptyComponent={
-          searchQuery && !loading ? (
-            <Text style={styles.emptyText}>Пользователи не найдены</Text>
+          searchQuery.length >= 2 ? (
+            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>Пользователи не найдены</Text>
           ) : null
         }
       />
@@ -167,46 +113,11 @@ export default function NewChatScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  searchContainer: { flexDirection: 'row', padding: 15, borderBottomWidth: 1, borderColor: '#eee' },
-  input: { 
-    flex: 1, 
-    backgroundColor: '#f0f0f0', 
-    borderRadius: 20, 
-    paddingHorizontal: 15, 
-    paddingVertical: 10, 
-    marginRight: 10,
-    fontSize: 16
-  },
-  searchButton: { 
-    backgroundColor: '#007AFF', 
-    width: 45, 
-    height: 45, 
-    borderRadius: 22.5, 
-    justifyContent: 'center', 
-    alignItems: 'center' 
-  },
-  searchButtonText: { color: '#fff', fontSize: 20 },
-  userItem: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    padding: 15, 
-    borderBottomWidth: 1, 
-    borderBottomColor: '#eee' 
-  },
-  userAvatar: { width: 50, height: 50, borderRadius: 25, marginRight: 15 },
-  userAvatarPlaceholder: { 
-    width: 50, 
-    height: 50, 
-    borderRadius: 25, 
-    backgroundColor: '#ddd', 
-    justifyContent: 'center', 
-    alignItems: 'center',
-    marginRight: 15
-  },
-  userAvatarText: { fontSize: 24 },
-  userInfo: { flex: 1 },
-  userName: { fontSize: 18, fontWeight: '600', marginBottom: 4 },
-  userHint: { fontSize: 14, color: '#888' },
-  emptyText: { textAlign: 'center', marginTop: 50, color: '#888', fontSize: 16 },
+  container: { flex: 1, padding: 20, paddingTop: 40 },
+  searchInput: { height: 50, borderRadius: 12, paddingHorizontal: 15, marginBottom: 15, fontSize: 16, borderWidth: 1 },
+  userItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1 },
+  avatar: { width: 50, height: 50, borderRadius: 25, marginRight: 15 },
+  avatarPlaceholder: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  username: { fontSize: 18, fontWeight: '600' },
+  emptyText: { textAlign: 'center', marginTop: 50, fontSize: 16 },
 });

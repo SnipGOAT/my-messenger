@@ -26,11 +26,11 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "owner": "snipgoat",
     "extra": {
       "eas": {
-        "projectId": "4cbec8e3-1e14-48e0-8232-c1c63017117a"
+        "projectId": "887e1316-8314-4dd6-b482-a4437a2e0306"
       }
-    }
+    },
+    "owner": "maximus20"
   }
 }

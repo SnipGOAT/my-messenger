@@ -10,19 +10,24 @@ import ChatListScreen from './screens/ChatListScreen';
 import ChatScreen from './screens/ChatScreen';
 import NewChatScreen from './screens/NewChatScreen';
 import DesktopLayout from './components/DesktopLayout';
+import SettingsScreen from './screens/SettingsScreen';
+import CreateGroupScreen from './screens/CreateGroupScreen';
+import ChatInfoScreen from './screens/ChatInfoScreen';
+import ChatMediaScreen from './screens/ChatMediaScreen';
+import CreateStoryScreen from './screens/CreateStoryScreen';
+import StoryViewerScreen from './screens/StoryViewerScreen';
+import StoryViewsScreen from './screens/StoryViewsScreen';
+import ViewProfileScreen from './screens/ViewProfileScreen';
+import EditProfileScreen from './screens/EditProfileScreen';
 import { View, Text, useWindowDimensions, Platform } from 'react-native';
 
 const Stack = createNativeStackNavigator();
 
-// Отдельный компонент, который использует хук push-уведомлений
-// Хук должен вызываться внутри провайдера авторизации, чтобы иметь доступ к сессии
 function AppContent() {
   const { session, loading } = useAuth();
   const { width } = useWindowDimensions();
   const isDesktop = Platform.OS === 'web' && width > 768;
 
-  // Регистрируем push-токен, когда пользователь авторизован
-  // Хук вызывается всегда, но внутри него проверка на user.id
   usePushNotifications();
 
   if (loading) {
@@ -33,7 +38,6 @@ function AppContent() {
     );
   }
 
-  // Если пользователь не авторизован — показываем экран входа
   if (!session) {
     return (
       <Stack.Navigator>
@@ -46,12 +50,10 @@ function AppContent() {
     );
   }
 
-  // Если десктоп (широкий экран в браузере) — показываем двухколоночный layout
   if (isDesktop) {
     return <DesktopLayout />;
   }
 
-  // Иначе — мобильная навигация
   return (
     <Stack.Navigator>
       <Stack.Screen 
@@ -62,12 +64,57 @@ function AppContent() {
       <Stack.Screen 
         name="Chat" 
         component={ChatScreen} 
-        options={({ route }) => ({ title: route.params.title })} 
+        options={({ route }) => ({ title: route.params?.title || 'Чат' })} 
       />
       <Stack.Screen 
         name="NewChat" 
         component={NewChatScreen} 
         options={{ title: 'Новый чат' }} 
+      />
+      <Stack.Screen 
+        name="Settings" 
+        component={SettingsScreen} 
+        options={{ title: 'Настройки' }} 
+      />
+      <Stack.Screen 
+        name="CreateGroup" 
+        component={CreateGroupScreen} 
+        options={{ title: 'Новая группа' }} 
+      />
+      <Stack.Screen 
+        name="ChatInfo" 
+        component={ChatInfoScreen} 
+        options={{ title: 'Информация о чате' }} 
+      />
+      <Stack.Screen 
+        name="ChatMedia" 
+        component={ChatMediaScreen} 
+        options={{ title: 'Медиа' }} 
+      />
+      <Stack.Screen 
+        name="CreateStory" 
+        component={CreateStoryScreen} 
+        options={{ title: 'Новый статус' }} 
+      />
+      <Stack.Screen 
+        name="StoryViewer" 
+        component={StoryViewerScreen} 
+        options={{ headerShown: false }} 
+      />
+      <Stack.Screen 
+        name="StoryViews" 
+        component={StoryViewsScreen} 
+        options={{ title: 'Просмотры' }} 
+      />
+      <Stack.Screen 
+        name="ViewProfile" 
+        component={ViewProfileScreen} 
+        options={{ title: 'Профиль' }} 
+      />
+      <Stack.Screen 
+        name="EditProfile" 
+        component={EditProfileScreen} 
+        options={{ title: 'Редактировать профиль' }} 
       />
     </Stack.Navigator>
   );
