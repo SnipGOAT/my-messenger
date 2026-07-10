@@ -33,11 +33,10 @@ export default function CallScreen({ route, navigation }) {
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState(null);
   const [hasAudio, setHasAudio] = useState(true);
-  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [audioElement, setAudioElement] = useState(null);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const remoteAudioRef = useRef(null);
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
@@ -46,37 +45,11 @@ export default function CallScreen({ route, navigation }) {
   const pendingIceRef = useRef([]);
   const remoteDescSetRef = useRef(false);
   const audioContextRef = useRef(null);
-  const audioSourceRef = useRef(null);
-  const audioDestinationRef = useRef(null);
 
   useEffect(() => {
     initCall();
-    
-    // Разблокировка аудио при первом клике
-    const unlockAudio = () => {
-      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-        audioContextRef.current.resume().then(() => {
-          console.log('✅ AudioContext разблокирован');
-          setAudioUnlocked(true);
-          
-          // Переподключаем аудио после разблокировки
-          if (remoteStreamRef.current && audioSourceRef.current) {
-            console.log('Переподключаем аудио к AudioContext');
-            audioSourceRef.current.disconnect();
-            audioSourceRef.current = audioContextRef.current.createMediaStreamSource(remoteStreamRef.current);
-            audioSourceRef.current.connect(audioDestinationRef.current);
-          }
-        });
-      }
-    };
-
-    document.addEventListener('click', unlockAudio);
-    document.addEventListener('touchstart', unlockAudio);
-
     return () => {
       endCall();
-      document.removeEventListener('click', unlockAudio);
-      document.removeEventListener('touchstart', unlockAudio);
     };
   }, []);
 
@@ -185,7 +158,6 @@ export default function CallScreen({ route, navigation }) {
         }
       };
 
-      // НОВОЕ: Обработка удаленного трека с AudioContext
       pc.ontrack = (event) => {
         console.log('Получен трек:', event.track.kind);
         console.log('Трек enabled:', event.track.enabled);
@@ -196,40 +168,41 @@ export default function CallScreen({ route, navigation }) {
           
           if (event.track.kind === 'video' && remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = event.streams[0];
-            remoteVideoRef.current.volume = 1.0;
-            remoteVideoRef.current.muted = false;
             remoteVideoRef.current.play().catch(err => {
               console.error('Видео play error:', err);
             });
           }
           
-          // НОВОЕ: Используем AudioContext для обхода autoplay policy
+          // НОВОЕ: Создаем audio элемент динамически
           if (event.track.kind === 'audio') {
-            console.log('Настраиваем аудио через AudioContext');
+            console.log('Создаем audio элемент для удаленного звука');
             
-            // Создаем AudioContext если нет
-            if (!audioContextRef.current) {
-              audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-              console.log('AudioContext создан, состояние:', audioContextRef.current.state);
-            }
+            const audio = document.createElement('audio');
+            audio.srcObject = event.streams[0];
+            audio.autoplay = true;
+            audio.controls = true; // Показываем controls для отладки
+            audio.style.position = 'fixed';
+            audio.style.bottom = '100px';
+            audio.style.left = '50%';
+            audio.style.transform = 'translateX(-50%)';
+            audio.style.zIndex = '9999';
+            audio.style.width = '300px';
             
-            // Создаем MediaStreamSource
-            audioSourceRef.current = audioContextRef.current.createMediaStreamSource(event.streams[0]);
+            document.body.appendChild(audio);
+            setAudioElement(audio);
             
-            // Подключаем к destination (динамикам)
-            audioDestinationRef.current = audioContextRef.current.destination;
-            audioSourceRef.current.connect(audioDestinationRef.current);
+            // Пытаемся запустить
+            audio.play().then(() => {
+              console.log('✅ Audio play() успешен');
+            }).catch(err => {
+              console.error('❌ Audio play() ошибка:', err);
+              setError('Нажмите на аудио-плеер ниже для включения звука');
+            });
             
-            console.log('Аудио подключено к AudioContext');
-            
-            // Если AudioContext уже разблокирован, резюмеруем
-            if (audioContextRef.current.state === 'suspended') {
-              console.log('AudioContext suspended, ждем клика пользователя');
-              setError('Нажмите на экран для включения звука');
-            } else {
-              console.log('✅ AudioContext уже активен, звук должен идти');
-              setAudioUnlocked(true);
-            }
+            // Отслеживаем состояние
+            audio.onplay = () => console.log('Audio playing');
+            audio.onpause = () => console.log('Audio paused');
+            audio.onvolumechange = () => console.log('Volume changed:', audio.volume);
           }
         }
         
@@ -383,6 +356,12 @@ export default function CallScreen({ route, navigation }) {
       audioContextRef.current.close();
     }
     if (timerRef.current) clearInterval(timerRef.current);
+    
+    // Удаляем audio элемент
+    if (audioElement) {
+      audioElement.remove();
+    }
+    
     setStatus('ended');
   };
 
@@ -425,14 +404,14 @@ export default function CallScreen({ route, navigation }) {
           <View style={styles.controls}>
             {hasAudio && (
               <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
-                <Text style={styles.controlIcon}>{isMuted ? '🔇' : ''}</Text>
+                <Text style={styles.controlIcon}>{isMuted ? '🔇' : '🎤'}</Text>
                 <Text style={styles.controlText}>{isMuted ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : ''}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
