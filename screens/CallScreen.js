@@ -189,6 +189,14 @@ export default function CallScreen({ route, navigation }) {
           
           if (event.track.kind === 'audio' && remoteAudioRef.current) {
             remoteAudioRef.current.srcObject = event.streams[0];
+            // Принудительное воспроизведение
+            remoteAudioRef.current.volume = 1.0;
+            remoteAudioRef.current.muted = false;
+            setTimeout(() => {
+              remoteAudioRef.current.play().catch(err => {
+                console.log('Автоплей заблокирован, нужно взаимодействие');
+              });
+            }, 100);
             remoteAudioRef.current.play().catch(err => console.error('Аудио:', err));
           }
         }
