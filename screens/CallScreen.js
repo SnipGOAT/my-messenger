@@ -4,7 +4,6 @@ import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
 
-// TURN-серверы, проверенные для РФ (с TCP!)
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   {
@@ -19,11 +18,6 @@ const ICE_SERVERS = [
   },
   {
     urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-    username: 'openrelayproject',
-    credential: 'openrelayproject'
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:80?transport=tcp',
     username: 'openrelayproject',
     credential: 'openrelayproject'
   }
@@ -54,14 +48,37 @@ export default function CallScreen({ route, navigation }) {
 
   useEffect(() => {
     initCall();
+    
+    // НОВОЕ: Разблокировка аудио при первом клике
+    const unlockAudio = () => {
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume().then(() => {
+          console.log('Аудио разблокировано пользователем');
+        });
+      }
+      
+      // Принудительно запускаем аудио элемент
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.play().then(() => {
+          console.log('Аудио запущено после клика');
+        }).catch(err => {
+          console.log('Не удалось запустить аудио:', err);
+        });
+      }
+    };
+
+    document.addEventListener('click', unlockAudio);
+    document.addEventListener('touchstart', unlockAudio);
+
     return () => {
       endCall();
+      document.removeEventListener('click', unlockAudio);
+      document.removeEventListener('touchstart', unlockAudio);
     };
   }, []);
 
   const applyPendingIce = async () => {
     if (pendingIceRef.current.length > 0 && pcRef.current) {
-      console.log(`Применяем ${pendingIceRef.current.length} ICE-кандидатов`);
       for (const candidate of pendingIceRef.current) {
         try {
           await pcRef.current.addIceCandidate(candidate);
@@ -118,11 +135,10 @@ export default function CallScreen({ route, navigation }) {
         localVideoRef.current.srcObject = stream;
       }
 
-      // ГЛАВНОЕ ИЗМЕНЕНИЕ: iceTransportPolicy: 'relay' — только TURN!
       const pc = new RTCPeerConnection({
         iceServers: ICE_SERVERS,
         iceCandidatePoolSize: 10,
-        iceTransportPolicy: 'relay', // ПРИНУДИТЕЛЬНО TURN (обходит блокировки UDP)
+        iceTransportPolicy: 'relay',
         bundlePolicy: 'max-bundle',
         rtcpMuxPolicy: 'require'
       });
@@ -131,27 +147,17 @@ export default function CallScreen({ route, navigation }) {
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('ICE кандидат:', {
-            type: event.candidate.type,
-            protocol: event.candidate.protocol,
-            address: event.candidate.address,
-            port: event.candidate.port
+        if (event.candidate && channelRef.current) {
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'ice-candidate',
+            payload: {
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+              target: route.params?.targetUserId
+            }
           });
-          
-          if (channelRef.current) {
-            // Используем httpSend вместо send (исправляет warning)
-            channelRef.current.send({
-              type: 'broadcast',
-              event: 'ice-candidate',
-              payload: {
-                candidate: event.candidate.candidate,
-                sdpMid: event.candidate.sdpMid,
-                sdpMLineIndex: event.candidate.sdpMLineIndex,
-                target: route.params?.targetUserId
-              }
-            });
-          }
         }
       };
 
@@ -161,7 +167,7 @@ export default function CallScreen({ route, navigation }) {
           pc.restartIce();
           setTimeout(() => {
             if (pc.iceConnectionState === 'failed') {
-              setError('Соединение не удалось. TURN-серверы могут быть недоступны.');
+              setError('Соединение не удалось');
               setStatus('ended');
             }
           }, 5000);
@@ -176,28 +182,60 @@ export default function CallScreen({ route, navigation }) {
         }
       };
 
+      // НОВОЕ: Обработка удаленного трека с гарантированным воспроизведением
       pc.ontrack = (event) => {
         console.log('Получен трек:', event.track.kind);
+        console.log('Трек enabled:', event.track.enabled);
+        console.log('Трек muted:', event.track.muted);
         
         if (Platform.OS === 'web') {
           remoteStreamRef.current = event.streams[0];
           
           if (event.track.kind === 'video' && remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = event.streams[0];
-            remoteVideoRef.current.play().catch(err => console.error('Видео:', err));
+            remoteVideoRef.current.volume = 1.0;
+            remoteVideoRef.current.muted = false;
+            remoteVideoRef.current.play().catch(err => {
+              console.error('Видео play error:', err);
+            });
           }
           
+          // НОВОЕ: Принудительное воспроизведение аудио
           if (event.track.kind === 'audio' && remoteAudioRef.current) {
+            console.log('Настраиваем аудио элемент');
+            
+            // Создаем аудио-контекст если нет
+            if (!audioContextRef.current) {
+              audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            // Разблокируем аудио-контекст
+            if (audioContextRef.current.state === 'suspended') {
+              audioContextRef.current.resume().then(() => {
+                console.log('Аудио-контекст разблокирован');
+              });
+            }
+            
+            // Настраиваем аудио элемент
             remoteAudioRef.current.srcObject = event.streams[0];
-            // Принудительное воспроизведение
             remoteAudioRef.current.volume = 1.0;
             remoteAudioRef.current.muted = false;
-            setTimeout(() => {
-              remoteAudioRef.current.play().catch(err => {
-                console.log('Автоплей заблокирован, нужно взаимодействие');
+            remoteAudioRef.current.autoplay = true;
+            
+            // Принудительно запускаем
+            const playPromise = remoteAudioRef.current.play();
+            
+            if (playPromise !== undefined) {
+              playPromise.then(() => {
+                console.log('✅ Аудио запущено успешно!');
+              }).catch(err => {
+                console.error('❌ Ошибка автовоспроизведения:', err);
+                console.log('Нужно взаимодействие пользователя для запуска аудио');
+                
+                // Показываем подсказку
+                setError('Нажмите на экран для включения звука');
               });
-            }, 100);
-            remoteAudioRef.current.play().catch(err => console.error('Аудио:', err));
+            }
           }
         }
         
@@ -360,7 +398,12 @@ export default function CallScreen({ route, navigation }) {
         Platform.OS === 'web' ? (
           <>
             <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideoWeb} />
-            <audio ref={remoteAudioRef} autoPlay style={{ display: 'none' }} />
+            <audio 
+              ref={remoteAudioRef} 
+              autoPlay 
+              playsInline
+              style={{ display: 'none' }}
+            />
           </>
         ) : (
           <View style={styles.remoteVideoMobile} />
@@ -409,7 +452,7 @@ export default function CallScreen({ route, navigation }) {
             )}
 
             <TouchableOpacity style={[styles.controlBtn, styles.hangupBtn]} onPress={endCall}>
-              <Text style={styles.controlIcon}>📞</Text>
+              <Text style={styles.controlIcon}></Text>
               <Text style={styles.controlText}>Завершить</Text>
             </TouchableOpacity>
           </View>
