@@ -12,12 +12,61 @@ import FileMessage from '../components/FileMessage';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 
-const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👎'];
+const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', ''];
 
 const FILE_ICONS = {
-  pdf: '📄', doc: '📝', docx: '📝', xls: '📊', xlsx: '📊',
+  pdf: '📄', doc: '', docx: '📝', xls: '📊', xlsx: '',
   ppt: '📽️', pptx: '📽️', zip: '🗜️', rar: '🗜️', '7z': '🗜️',
-  txt: '📃', default: '📎'
+  txt: '📃', default: ''
+};
+
+// Форматирование времени (HH:MM)
+const formatTime = (dateString) => {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+};
+
+// Форматирование даты для заголовка
+const formatDateHeader = (dateString) => {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const isToday = date.toDateString() === today.toDateString();
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+
+  if (isToday) return 'Сегодня';
+  if (isYesterday) return 'Вчера';
+
+  return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+};
+
+// Группировка сообщений по датам
+const groupMessagesByDate = (messages) => {
+  const groups = {};
+  
+  messages.forEach(msg => {
+    if (!msg || !msg.id) return;
+    
+    const date = new Date(msg.created_at);
+    const dateKey = date.toDateString();
+    
+    if (!groups[dateKey]) {
+      groups[dateKey] = {
+        date: msg.created_at,
+        messages: []
+      };
+    }
+    
+    groups[dateKey].messages.push(msg);
+  });
+
+  return Object.values(groups).sort((a, b) => 
+    new Date(a.date) - new Date(b.date)
+  );
 };
 
 export default function ChatScreen({ route, navigation }) {
@@ -55,6 +104,11 @@ export default function ChatScreen({ route, navigation }) {
 
   const messageIds = messages.filter(m => m && m.id).map(m => m.id);
   const { reactions, toggleReaction } = useMessageReactions(messageIds);
+
+  // Группировка сообщений по датам
+  const groupedMessages = useMemo(() => {
+    return groupMessagesByDate(messages);
+  }, [messages]);
 
   useEffect(() => {
     const loadChatDetails = async () => {
@@ -385,6 +439,7 @@ export default function ChatScreen({ route, navigation }) {
     const hasText = !!item.content && item.content.trim();
     const messageReactions = reactions[item.id] || [];
     const isPinned = pinnedMessage?.id === item.id;
+    const messageTime = formatTime(item.created_at);
 
     return (
       <Pressable 
@@ -410,8 +465,18 @@ export default function ChatScreen({ route, navigation }) {
         {hasDocument && <FileMessage fileName={item.file_name} fileSize={item.file_size} fileType={item.file_type} fileUrl={item.file_document_url} colors={colors} />}
         {hasImage && <Image source={{ uri: item.file_url }} style={styles.messageImage} resizeMode="cover" />}
         {hasText && <Text style={[styles.messageText, { color: isMe ? '#fff' : colors.text }, hasImage && styles.textOnImage]}>{item.content}</Text>}
-        {isMe && <Text style={[styles.statusText, hasImage && styles.statusOnImage]}>{item.is_read ? '✓✓' : '✓'}</Text>}
-        {item.edited_at && <Text style={[styles.editedText, { color: isMe ? 'rgba(255,255,255,0.6)' : colors.textSecondary }]}>изменено</Text>}
+        
+        {/* Время сообщения */}
+        <View style={styles.messageTimeContainer}>
+          {isMe && <Text style={[styles.statusText, hasImage && styles.statusOnImage]}>{item.is_read ? '✓✓' : '✓'}</Text>}
+          <Text style={[styles.messageTime, { color: isMe ? 'rgba(255,255,255,0.7)' : colors.textSecondary }, hasImage && styles.timeOnImage]}>
+            {messageTime}
+          </Text>
+        </View>
+
+        {item.edited_at && (
+          <Text style={[styles.editedText, { color: isMe ? 'rgba(255,255,255,0.6)' : colors.textSecondary }]}>изменено</Text>
+        )}
         {messageReactions.length > 0 && (
           <View style={styles.reactionsContainer}>
             {messageReactions.map((r, index) => (
@@ -426,7 +491,7 @@ export default function ChatScreen({ route, navigation }) {
   const canPin = !isGroup || (isGroup && isCreator);
 
   const getFileIcon = (fileName) => {
-    if (!fileName) return '📎';
+    if (!fileName) return '';
     const ext = fileName.split('.').pop().toLowerCase();
     return FILE_ICONS[ext] || FILE_ICONS.default;
   };
@@ -439,19 +504,37 @@ export default function ChatScreen({ route, navigation }) {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
   };
 
-  // Функция для открытия профиля/инфо о группе при нажатии на шапку
   const handleHeaderPress = () => {
     if (!isGroup) {
-      // Для личного чата — находим собеседника
       const otherUserMessage = messages.find(m => m.sender_id !== currentUserId);
       if (otherUserMessage) {
         navigation?.navigate('ViewProfile', { userId: otherUserMessage.sender_id });
       }
     } else {
-      // Для группового чата — открываем инфо о группе
       navigation?.navigate('ChatInfo', { chatId, title, isGroup });
     }
   };
+
+  // Рендер группы сообщений с заголовком даты
+  const renderDateGroup = ({ item: dateGroup }) => (
+    <View>
+      {/* Заголовок даты */}
+      <View style={styles.dateHeaderContainer}>
+        <View style={[styles.dateHeaderLine, { backgroundColor: colors.border }]} />
+        <Text style={[styles.dateHeaderText, { color: colors.textSecondary, backgroundColor: colors.background }]}>
+          {formatDateHeader(dateGroup.date)}
+        </Text>
+        <View style={[styles.dateHeaderLine, { backgroundColor: colors.border }]} />
+      </View>
+
+      {/* Сообщения этой даты */}
+      {dateGroup.messages.map((msg, index) => (
+        <View key={msg.id} style={styles.messageWrapper}>
+          {renderMessage({ item: msg })}
+        </View>
+      ))}
+    </View>
+  );
 
   return (
     <KeyboardAvoidingView style={[styles.container, { backgroundColor: colors.background }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
@@ -481,7 +564,7 @@ export default function ChatScreen({ route, navigation }) {
             <Text style={{ fontSize: 20 }}>🔍</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => navigation?.navigate('ChatInfo', { chatId, title, isGroup })} style={styles.chatHeaderButton}>
-            <Text style={{ fontSize: 20 }}>⚙️</Text>
+            <Text style={{ fontSize: 20 }}>️</Text>
           </TouchableOpacity>
         </TouchableOpacity>
       )}
@@ -511,9 +594,9 @@ export default function ChatScreen({ route, navigation }) {
 
       <FlatList
         ref={flatListRef}
-        data={filteredMessages}
-        renderItem={renderMessage}
-        keyExtractor={(item, index) => item?.id || `msg-${index}`}
+        data={groupedMessages}
+        renderItem={renderDateGroup}
+        keyExtractor={(item) => item.date}
         style={styles.list}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
@@ -530,7 +613,7 @@ export default function ChatScreen({ route, navigation }) {
           <View style={styles.replyBannerContent}>
             <Text style={[styles.replyBannerTitle, { color: colors.primary }]}>Ответ {replyingTo.profiles?.username || 'анониму'}</Text>
             <Text style={[styles.replyBannerText, { color: colors.textSecondary }]} numberOfLines={1}>
-              {replyingTo.audio_url ? '🎤 Голосовое' : replyingTo.file_document_url ? `📎 ${replyingTo.file_name}` : replyingTo.content || '📷 Фото'}
+              {replyingTo.audio_url ? '🎤 Голосовое' : replyingTo.file_document_url ? ` ${replyingTo.file_name}` : replyingTo.content || '📷 Фото'}
             </Text>
           </View>
           <TouchableOpacity onPress={() => setReplyingTo(null)} style={styles.replyBannerCancel}>
@@ -546,7 +629,7 @@ export default function ChatScreen({ route, navigation }) {
             <Text style={[styles.recordingText, { color: colors.text }]}>Запись: {duration}</Text>
           </View>
           <View style={styles.recordingActions}>
-            <TouchableOpacity onPress={cancelRecording} style={styles.recordingButton}><Text style={{ fontSize: 24 }}>✕</Text></TouchableOpacity>
+            <TouchableOpacity onPress={cancelRecording} style={styles.recordingButton}><Text style={{ fontSize: 24 }}></Text></TouchableOpacity>
             <TouchableOpacity onPress={handleStopRecordingForPreview} style={[styles.recordingButton, { backgroundColor: colors.primary }]}><Text style={{ fontSize: 24, color: '#fff' }}>✓</Text></TouchableOpacity>
           </View>
         </View>
@@ -580,7 +663,7 @@ export default function ChatScreen({ route, navigation }) {
             )}
             {stagedMedia.type === 'audio' && (
               <View style={[styles.previewAudioCard, { backgroundColor: colors.inputBackground }]}>
-                <Text style={styles.previewAudioIcon}>🎤</Text>
+                <Text style={styles.previewAudioIcon}></Text>
                 <Text style={[styles.previewAudioText, { color: colors.text }]}>Голосовое сообщение</Text>
               </View>
             )}
@@ -660,7 +743,7 @@ export default function ChatScreen({ route, navigation }) {
               <Text style={[styles.menuTitle, { color: colors.text, marginBottom: 15, fontSize: 18, fontWeight: 'bold' }]}>Действия с сообщением</Text>
               
               <TouchableOpacity style={styles.actionMenuItem} activeOpacity={0.7} onPress={() => { setReplyingTo(selectedMessage); setActionMenuVisible(false); }}>
-                <Text style={[styles.actionMenuText, { color: colors.primary }]}>↩️ Ответить</Text>
+                <Text style={[styles.actionMenuText, { color: colors.primary }]}>️ Ответить</Text>
               </TouchableOpacity>
 
               <TouchableOpacity 
@@ -785,6 +868,11 @@ const styles = StyleSheet.create({
   statusOnImage: { color: '#fff', backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   editedText: { fontSize: 10, alignSelf: 'flex-end', marginTop: 2, marginRight: 4, fontStyle: 'italic' },
 
+  // Время сообщения
+  messageTimeContainer: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 4, marginRight: 4 },
+  messageTime: { fontSize: 11, marginLeft: 4 },
+  timeOnImage: { color: 'rgba(255,255,255,0.8)', backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4, marginTop: 4 },
+
   reactionsContainer: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 4, paddingHorizontal: 4 },
   reactionEmoji: { fontSize: 16, marginRight: 4, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 10, paddingHorizontal: 4, paddingVertical: 2 },
 
@@ -853,4 +941,25 @@ const styles = StyleSheet.create({
   forwardChatAvatar: { width: 45, height: 45, borderRadius: 22.5, marginRight: 15 },
   forwardChatAvatarPlaceholder: { width: 45, height: 45, borderRadius: 22.5, justifyContent: 'center', alignItems: 'center', marginRight: 15 },
   forwardChatTitle: { fontSize: 16, fontWeight: '600' },
+
+  // Стили для заголовков дат
+  dateHeaderContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 15,
+  },
+  dateHeaderLine: {
+    flex: 1,
+    height: 1,
+  },
+  dateHeaderText: {
+    fontSize: 13,
+    fontWeight: '600',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  messageWrapper: {
+    marginBottom: 2,
+  },
 });
