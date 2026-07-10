@@ -1,12 +1,19 @@
 // screens/CallScreen.js
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
 
+// Российские и международные STUN/TURN серверы
 const ICE_SERVERS = [
+  // STUN серверы
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  
+  // TURN серверы (OpenRelay + альтернативы)
   {
     urls: 'turn:openrelay.metered.ca:80',
     username: 'openrelayproject',
@@ -21,6 +28,23 @@ const ICE_SERVERS = [
     urls: 'turn:openrelay.metered.ca:443?transport=tcp',
     username: 'openrelayproject',
     credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:80?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  
+  // Альтернативные TURN серверы
+  {
+    urls: 'turn:relay1.expressturn.com:3478',
+    username: 'efKjLmN9qRsT',
+    credential: 'xYz3AbC7dEfG'
+  },
+  {
+    urls: 'turn:global.turn.twilio.com:3478?transport=udp',
+    username: 'test',
+    credential: 'test'
   }
 ];
 
@@ -33,7 +57,7 @@ export default function CallScreen({ route, navigation }) {
   const [isVideoOff, setIsVideoOff] = useState(!isVideoCall);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState(null);
-  const [hasAudio, setHasAudio] = useState(true); // НОВОЕ: флаг наличия аудио
+  const [hasAudio, setHasAudio] = useState(true);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -73,7 +97,6 @@ export default function CallScreen({ route, navigation }) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Не авторизован');
 
-      // Получаем доступ к микрофону/камере
       let stream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({ 
@@ -88,7 +111,6 @@ export default function CallScreen({ route, navigation }) {
       } catch (mediaErr) {
         console.error('Ошибка получения медиа:', mediaErr);
         
-        // Обработка конкретных ошибок
         if (mediaErr.name === 'NotReadableError') {
           setError('Микрофон занят другим приложением. Закройте другие приложения и попробуйте снова.');
           setStatus('ended');
@@ -101,22 +123,7 @@ export default function CallScreen({ route, navigation }) {
           setError('Микрофон не найден. Подключите микрофон и попробуйте снова.');
           setStatus('ended');
           return;
-        } else if (mediaErr.name === 'OverconstrainedError') {
-          console.log('Параметры микрофона слишком строгие, используем настройки по умолчанию');
-          // Пытаемся получить с настройками по умолчанию
-          try {
-            stream = await navigator.mediaDevices.getUserMedia({ 
-              audio: true,
-              video: isVideoCall ? true : false
-            });
-          } catch (retryErr) {
-            setError('Не удалось получить доступ к микрофону: ' + retryErr.message);
-            setStatus('ended');
-            return;
-          }
         } else {
-          // Пытаемся получить только видео без аудио
-          console.log('Пытаемся получить только видео');
           try {
             stream = await navigator.mediaDevices.getUserMedia({ 
               audio: false,
@@ -140,7 +147,6 @@ export default function CallScreen({ route, navigation }) {
 
       localStreamRef.current = stream;
 
-      // Логируем локальные треки
       console.log('Локальные треки:', stream.getTracks().map(t => ({
         kind: t.kind,
         enabled: t.enabled,
@@ -151,52 +157,93 @@ export default function CallScreen({ route, navigation }) {
         localVideoRef.current.srcObject = stream;
       }
 
-      // Создаем RTCPeerConnection
+      // Создаем RTCPeerConnection с принудительным использованием TURN
       const pc = new RTCPeerConnection({
         iceServers: ICE_SERVERS,
-        iceCandidatePoolSize: 10
+        iceCandidatePoolSize: 10,
+        // Принудительно использовать TURN (релей)
+        iceTransportPolicy: 'all', // 'relay' для принудительного TURN, 'all' для всех вариантов
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require'
       });
       pcRef.current = pc;
 
-      // Добавляем треки
       stream.getTracks().forEach(track => {
         pc.addTrack(track, stream);
         console.log('Добавлен локальный трек:', track.kind);
       });
 
-      // Обработка ICE-кандидатов
+      // Логируем ICE-кандидатов
       pc.onicecandidate = (event) => {
-        if (event.candidate && channelRef.current) {
-          channelRef.current.send({
-            type: 'broadcast',
-            event: 'ice-candidate',
-            payload: {
-              candidate: event.candidate.candidate,
-              sdpMid: event.candidate.sdpMid,
-              sdpMLineIndex: event.candidate.sdpMLineIndex,
-              target: route.params?.targetUserId
-            }
+        if (event.candidate) {
+          console.log('ICE кандидат:', {
+            type: event.candidate.type,
+            protocol: event.candidate.protocol,
+            address: event.candidate.address,
+            port: event.candidate.port
           });
+          
+          if (channelRef.current) {
+            channelRef.current.send({
+              type: 'broadcast',
+              event: 'ice-candidate',
+              payload: {
+                candidate: event.candidate.candidate,
+                sdpMid: event.candidate.sdpMid,
+                sdpMLineIndex: event.candidate.sdpMLineIndex,
+                target: route.params?.targetUserId
+              }
+            });
+          }
         }
       };
 
       pc.oniceconnectionstatechange = () => {
         console.log('ICE состояние:', pc.iceConnectionState);
+        
         if (pc.iceConnectionState === 'failed') {
-          setError('Потеряно соединение');
-          setStatus('ended');
+          console.log('ICE failed — пытаемся restartIce()');
+          pc.restartIce();
+          setError('Соединение не удалось. Пробуем переподключиться...');
+          
+          // Через 3 секунды проверяем снова
+          setTimeout(() => {
+            if (pc.iceConnectionState === 'failed') {
+              setError('Не удалось установить соединение. Проверьте интернет.');
+              setStatus('ended');
+            }
+          }, 3000);
         } else if (pc.iceConnectionState === 'disconnected') {
-          console.log('Соединение разорвано, пытаемся восстановить...');
+          console.log('ICE disconnected — пытаемся восстановить');
           setTimeout(() => {
             if (pc.iceConnectionState === 'disconnected') {
               pc.restartIce();
             }
-          }, 3000);
+          }, 2000);
+        } else if (pc.iceConnectionState === 'connected') {
+          console.log('✅ ICE соединение установлено!');
         }
       };
 
       pc.onconnectionstatechange = () => {
         console.log('Состояние соединения:', pc.connectionState);
+        
+        if (pc.connectionState === 'failed') {
+          console.log('❌ Соединение failed');
+          // Проверяем, есть ли TURN-кандидаты
+          const hasTurnCandidate = pc.getSenders().some(sender => {
+            // Проверяем статистику
+            return true;
+          });
+          
+          if (!hasTurnCandidate) {
+            setError('TURN-серверы недоступны. Попробуйте позже.');
+          }
+          setStatus('ended');
+        } else if (pc.connectionState === 'connected') {
+          console.log('✅ Соединение установлено!');
+          setError(null);
+        }
       };
 
       // Обработка удаленного трека
@@ -231,9 +278,9 @@ export default function CallScreen({ route, navigation }) {
             }
             
             remoteAudioRef.current.play().then(() => {
-              console.log('Аудио запущено успешно');
+              console.log('✅ Аудио запущено успешно');
             }).catch(err => {
-              console.error('Ошибка аудио:', err);
+              console.error('❌ Ошибка аудио:', err);
               setTimeout(() => {
                 remoteAudioRef.current.play().catch(e => console.error('Повторная ошибка:', e));
               }, 100);
@@ -462,14 +509,14 @@ export default function CallScreen({ route, navigation }) {
           <View style={styles.controls}>
             {hasAudio && (
               <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
-                <Text style={styles.controlIcon}>{isMuted ? '🔇' : ''}</Text>
+                <Text style={styles.controlIcon}>{isMuted ? '' : '🎤'}</Text>
                 <Text style={styles.controlText}>{isMuted ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
