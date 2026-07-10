@@ -1,6 +1,6 @@
 // screens/ChatScreen.js
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, Alert, Pressable, Modal } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, Alert, Pressable, Modal, Linking } from 'react-native';
 import { useRealtimeMessages } from '../hooks/useRealtimeMessages';
 import { useMessageReactions } from '../hooks/useMessageReactions';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
@@ -12,13 +12,16 @@ import FileMessage from '../components/FileMessage';
 import { Video, ResizeMode } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
 
-const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👎'];
+const EMOJIS = ['👍', '❤️', '', '😮', '😢', '', '🔥', ''];
 
 const FILE_ICONS = {
-  pdf: '', doc: '📝', docx: '📝', xls: '', xlsx: '📊',
-  ppt: '📽️', pptx: '📽️', zip: '🗜️', rar: '🗜️', '7z': '🗜️',
-  txt: '📃', default: '📎'
+  pdf: '📄', doc: '📝', docx: '📝', xls: '📊', xlsx: '📊',
+  ppt: '📽️', pptx: '📽️', zip: '🗜️', rar: '🗜️', '7z': '️',
+  txt: '', default: '📎'
 };
 
 const formatTime = (dateString) => {
@@ -55,6 +58,50 @@ const groupMessagesByDate = (messages) => {
     groups[dateKey].messages.push(msg);
   });
   return Object.values(groups).sort((a, b) => new Date(a.date) - new Date(b.date));
+};
+
+// Функция скачивания файла
+const downloadFile = async (url, filename, type = 'image') => {
+  try {
+    if (Platform.OS === 'web') {
+      // Для веба: создаем ссылку и кликаем по ней
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return true;
+    } else {
+      // Для мобильных: запрашиваем разрешение и сохраняем
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Ошибка', 'Необходимо разрешение на доступ к медиафайлам');
+        return false;
+      }
+
+      // Скачиваем файл во временную директорию
+      const fileUri = FileSystem.documentDirectory + filename;
+      const { uri } = await FileSystem.downloadAsync(url, fileUri);
+
+      // Сохраняем в галерею
+      if (type === 'video') {
+        await MediaLibrary.saveToLibraryAsync(uri);
+      } else {
+        await MediaLibrary.createAssetAsync(uri);
+      }
+
+      // Очищаем временный файл
+      await FileSystem.deleteAsync(uri, { idempotent: true });
+
+      return true;
+    }
+  } catch (error) {
+    console.error('Ошибка скачивания:', error);
+    Alert.alert('Ошибка', 'Не удалось скачать файл');
+    return false;
+  }
 };
 
 export default function ChatScreen({ route, navigation }) {
@@ -302,7 +349,6 @@ export default function ChatScreen({ route, navigation }) {
     });
   };
 
-  // НОВАЯ ФУНКЦИЯ: Выбор видео
   const pickVideoForPreview = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) return Alert.alert('Разрешение отклонено', 'Разрешите доступ к галерее!');
@@ -310,7 +356,7 @@ export default function ChatScreen({ route, navigation }) {
       mediaTypes: ImagePicker.MediaTypeOptions.Videos, 
       allowsEditing: false,
       quality: 1,
-      videoMaxDuration: 300, // Максимум 5 минут
+      videoMaxDuration: 300,
     });
     if (result.canceled) return;
     const file = result.assets[0];
@@ -420,6 +466,20 @@ export default function ChatScreen({ route, navigation }) {
     if (!success) Platform.OS === 'web' ? window.alert('Не удалось начать запись') : Alert.alert('Ошибка', 'Не удалось начать запись');
   };
 
+  // Функция скачивания для конкретного сообщения
+  const handleDownload = async (message) => {
+    if (message.file_url) {
+      const filename = `photo_${Date.now()}.jpg`;
+      const success = await downloadFile(message.file_url, filename, 'image');
+      if (success) Alert.alert('Успех', 'Фото сохранено');
+    } else if (message.video_url) {
+      const filename = `video_${Date.now()}.mp4`;
+      const success = await downloadFile(message.video_url, filename, 'video');
+      if (success) Alert.alert('Успех', 'Видео сохранено');
+    }
+    setActionMenuVisible(false);
+  };
+
   const filteredMessages = useMemo(() => {
     const validMessages = messages.filter(m => m && m.id);
     if (!isSearchActive || !searchQuery.trim()) return validMessages;
@@ -436,7 +496,7 @@ export default function ChatScreen({ route, navigation }) {
       <View style={[styles.quoteContainer, { borderLeftColor: isOriginalMe ? colors.myMessage : colors.textSecondary }]}>
         <Text style={[styles.quoteAuthor, { color: isOriginalMe ? colors.myMessage : colors.textSecondary }]}>{authorName}</Text>
         <Text style={[styles.quoteText, { color: colors.textSecondary }]} numberOfLines={2}>
-          {originalMessage.audio_url ? '🎤 Голосовое' : originalMessage.video_url ? '🎥 Видео' : originalMessage.file_document_url ? `📎 ${originalMessage.file_name}` : originalMessage.content || '📷 Фото'}
+          {originalMessage.audio_url ? '🎤 Голосовое' : originalMessage.video_url ? ' Видео' : originalMessage.file_document_url ? `📎 ${originalMessage.file_name}` : originalMessage.content || '📷 Фото'}
         </Text>
       </View>
     );
@@ -469,7 +529,7 @@ export default function ChatScreen({ route, navigation }) {
         
         {item.forwarded_from_username && (
           <Text style={[styles.forwardedLabel, { color: isMe ? 'rgba(255,255,255,0.8)' : colors.primary }]}>
-            ↪️ Переслано от {item.forwarded_from_username}
+            ️ Переслано от {item.forwarded_from_username}
           </Text>
         )}
 
@@ -478,7 +538,6 @@ export default function ChatScreen({ route, navigation }) {
         {hasDocument && <FileMessage fileName={item.file_name} fileSize={item.file_size} fileType={item.file_type} fileUrl={item.file_document_url} colors={colors} />}
         {hasImage && <Image source={{ uri: item.file_url }} style={styles.messageImage} resizeMode="cover" />}
         
-        {/* Рендер видео */}
         {hasVideo && (
           <Video
             source={{ uri: item.video_url }}
@@ -597,7 +656,7 @@ export default function ChatScreen({ route, navigation }) {
           <View style={{ flex: 1 }}>
             <Text style={[styles.pinnedTitle, { color: colors.textSecondary }]}>Закрепленное сообщение</Text>
             <Text style={[styles.pinnedText, { color: colors.text }]} numberOfLines={1}>
-              {pinnedMessage.content || (pinnedMessage.audio_url ? '🎤 Голосовое' : pinnedMessage.video_url ? ' Видео' : pinnedMessage.file_document_url ? ` ${pinnedMessage.file_name}` : ' Фото')}
+              {pinnedMessage.content || (pinnedMessage.audio_url ? '🎤 Голосовое' : pinnedMessage.video_url ? '🎥 Видео' : pinnedMessage.file_document_url ? `📎 ${pinnedMessage.file_name}` : '📷 Фото')}
             </Text>
           </View>
           {canPin && (
@@ -635,7 +694,7 @@ export default function ChatScreen({ route, navigation }) {
           <View style={styles.replyBannerContent}>
             <Text style={[styles.replyBannerTitle, { color: colors.primary }]}>Ответ {replyingTo.profiles?.username || 'анониму'}</Text>
             <Text style={[styles.replyBannerText, { color: colors.textSecondary }]} numberOfLines={1}>
-              {replyingTo.audio_url ? '🎤 Голосовое' : replyingTo.video_url ? '🎥 Видео' : replyingTo.file_document_url ? `📎 ${replyingTo.file_name}` : replyingTo.content || '📷 Фото'}
+              {replyingTo.audio_url ? '🎤 Голосовое' : replyingTo.video_url ? ' Видео' : replyingTo.file_document_url ? `📎 ${replyingTo.file_name}` : replyingTo.content || '📷 Фото'}
             </Text>
           </View>
           <TouchableOpacity onPress={() => setReplyingTo(null)} style={styles.replyBannerCancel}>
@@ -661,9 +720,9 @@ export default function ChatScreen({ route, navigation }) {
         <View style={[styles.previewContainer, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
           <View style={styles.previewHeader}>
             <Text style={[styles.previewTitle, { color: colors.textSecondary }]}>
-              {stagedMedia.type === 'image' && '📷 Предпросмотр фото'}
+              {stagedMedia.type === 'image' && ' Предпросмотр фото'}
               {stagedMedia.type === 'video' && '🎥 Предпросмотр видео'}
-              {stagedMedia.type === 'document' && ' Предпросмотр файла'}
+              {stagedMedia.type === 'document' && '📎 Предпросмотр файла'}
               {stagedMedia.type === 'audio' && '🎤 Предпросмотр голосового'}
             </Text>
             <TouchableOpacity onPress={cancelStagedMedia} style={styles.previewCancelButton}>
@@ -695,7 +754,7 @@ export default function ChatScreen({ route, navigation }) {
             )}
             {stagedMedia.type === 'audio' && (
               <View style={[styles.previewAudioCard, { backgroundColor: colors.inputBackground }]}>
-                <Text style={styles.previewAudioIcon}>🎤</Text>
+                <Text style={styles.previewAudioIcon}></Text>
                 <Text style={[styles.previewAudioText, { color: colors.text }]}>Голосовое сообщение</Text>
               </View>
             )}
@@ -736,9 +795,8 @@ export default function ChatScreen({ route, navigation }) {
           <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickImageForPreview} disabled={uploading}>
             {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>🖼️</Text>}
           </TouchableOpacity>
-          {/* Кнопка для видео */}
           <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickVideoForPreview} disabled={uploading}>
-            {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>🎥</Text>}
+            {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}></Text>}
           </TouchableOpacity>
           <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickDocumentForPreview} disabled={uploading}>
             {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>📎</Text>}
@@ -779,7 +837,7 @@ export default function ChatScreen({ route, navigation }) {
               <Text style={[styles.menuTitle, { color: colors.text, marginBottom: 15, fontSize: 18, fontWeight: 'bold' }]}>Действия с сообщением</Text>
               
               <TouchableOpacity style={styles.actionMenuItem} activeOpacity={0.7} onPress={() => { setReplyingTo(selectedMessage); setActionMenuVisible(false); }}>
-                <Text style={[styles.actionMenuText, { color: colors.primary }]}>️ Ответить</Text>
+                <Text style={[styles.actionMenuText, { color: colors.primary }]}>↩️ Ответить</Text>
               </TouchableOpacity>
 
               <TouchableOpacity 
@@ -794,6 +852,13 @@ export default function ChatScreen({ route, navigation }) {
                 <Text style={[styles.actionMenuText, { color: colors.primary }]}>↪️ Переслать</Text>
               </TouchableOpacity>
 
+              {/* Кнопка скачивания для фото и видео */}
+              {(selectedMessage?.file_url || selectedMessage?.video_url) && (
+                <TouchableOpacity style={styles.actionMenuItem} activeOpacity={0.7} onPress={() => handleDownload(selectedMessage)}>
+                  <Text style={[styles.actionMenuText, { color: colors.primary }]}>⬇️ Скачать</Text>
+                </TouchableOpacity>
+              )}
+
               {canPin && selectedMessage?.id !== pinnedMessage?.id && (
                 <TouchableOpacity style={styles.actionMenuItem} activeOpacity={0.7} onPress={() => handlePinMessage(selectedMessage.id)}>
                   <Text style={[styles.actionMenuText, { color: colors.primary }]}>📌 Закрепить</Text>
@@ -807,7 +872,7 @@ export default function ChatScreen({ route, navigation }) {
 
               {selectedMessage?.sender_id === currentUserId && !selectedMessage.file_url && !selectedMessage.video_url && !selectedMessage.audio_url && !selectedMessage.file_document_url && (
                 <TouchableOpacity style={styles.actionMenuItem} activeOpacity={0.7} onPress={() => { setText(selectedMessage.content); setEditingMessage(selectedMessage); setActionMenuVisible(false); }}>
-                  <Text style={[styles.actionMenuText, { color: colors.text }]}>️ Редактировать</Text>
+                  <Text style={[styles.actionMenuText, { color: colors.text }]}>✏️ Редактировать</Text>
                 </TouchableOpacity>
               )}
               {selectedMessage?.sender_id === currentUserId && (
@@ -841,7 +906,7 @@ export default function ChatScreen({ route, navigation }) {
           {forwardingMessage && (
             <View style={[styles.forwardPreview, { backgroundColor: colors.surface }]}>
               <Text style={[styles.forwardPreviewText, { color: colors.textSecondary }]} numberOfLines={2}>
-                {forwardingMessage.content || (forwardingMessage.audio_url ? '🎤 Голосовое' : forwardingMessage.video_url ? '🎥 Видео' : forwardingMessage.file_document_url ? `📎 ${forwardingMessage.file_name}` : '📷 Фото')}
+                {forwardingMessage.content || (forwardingMessage.audio_url ? '🎤 Голосовое' : forwardingMessage.video_url ? ' Видео' : forwardingMessage.file_document_url ? `📎 ${forwardingMessage.file_name}` : '📷 Фото')}
               </Text>
             </View>
           )}
@@ -893,7 +958,7 @@ const styles = StyleSheet.create({
 
   forwardedLabel: { fontSize: 12, fontWeight: 'bold', marginBottom: 4, fontStyle: 'italic' },
   
-  messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 15, marginBottom: 8, overflow: 'hidden' }, // Увеличил maxWidth для видео
+  messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 15, marginBottom: 8, overflow: 'hidden' },
   myMessage: { alignSelf: 'flex-end', borderBottomRightRadius: 5 },
   otherMessage: { alignSelf: 'flex-start', borderBottomLeftRadius: 5, borderWidth: 1 },
   senderName: { fontSize: 12, marginBottom: 4, fontWeight: 'bold', paddingHorizontal: 4 },

@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "MyMessenger",
-    "slug": "MyMessenger",
+    "name": "MAX 2.0",
+    "slug": "MAX 2.0",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -12,8 +12,22 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "permissions": [
+      "MEDIA_LIBRARY",
+      "READ_EXTERNAL_STORAGE",
+      "WRITE_EXTERNAL_STORAGE",
+      "CAMERA",
+      "RECORD_AUDIO"
+    ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "MAX 2.0 нуждается в доступе к фото для сохранения изображений и видео",
+        "NSPhotoLibraryAddUsageDescription": "MAX 2.0 нуждается в доступе для сохранения фото и видео в вашу галерею",
+        "NSCameraUsageDescription": "MAX 2.0 нуждается в доступе к камере для отправки фото",
+        "NSMicrophoneUsageDescription": "MAX 2.0 нуждается в доступе к микрофону для записи голосовых сообщений",
+        "NSDocumentsFolderUsageDescription": "MAX 2.0 нуждается в доступе к файлам для отправки документов"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -21,7 +35,13 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.snipgoat.MyMessenger"
+      "package": "com.snipgoat.MAX2.0",
+      "permissions": [
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "CAMERA",
+        "RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
