@@ -1,12 +1,13 @@
 // screens/ChatScreen.js
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, Alert, Pressable, Modal, Linking } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, Alert, Pressable, Modal } from 'react-native';
 import { useRealtimeMessages } from '../hooks/useRealtimeMessages';
 import { useMessageReactions } from '../hooks/useMessageReactions';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { supabase } from '../lib/supabase';
 import { uploadImage } from '../lib/storage';
 import { useTheme } from '../contexts/ThemeContext';
+import { parseMarkdown, wrapWithMarkdown } from '../lib/markdown';
 import AudioPlayer from '../components/AudioPlayer';
 import FileMessage from '../components/FileMessage';
 import { Video, ResizeMode } from 'expo-av';
@@ -15,10 +16,10 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 
-const EMOJIS = ['', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👎'];
+const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👎'];
 
 const FILE_ICONS = {
-  pdf: '📄', doc: '📝', docx: '📝', xls: '', xlsx: '📊',
+  pdf: '📄', doc: '📝', docx: '📝', xls: '📊', xlsx: '📊',
   ppt: '📽️', pptx: '📽️', zip: '🗜️', rar: '🗜️', '7z': '🗜️',
   txt: '📃', default: '📎'
 };
@@ -76,16 +77,13 @@ const downloadFile = async (url, filename, type = 'image') => {
         Alert.alert('Ошибка', 'Необходимо разрешение на доступ к медиафайлам');
         return false;
       }
-
       const fileUri = FileSystem.documentDirectory + filename;
       const { uri } = await FileSystem.downloadAsync(url, fileUri);
-
       if (type === 'video') {
         await MediaLibrary.saveToLibraryAsync(uri);
       } else {
         await MediaLibrary.createAssetAsync(uri);
       }
-
       await FileSystem.deleteAsync(uri, { idempotent: true });
       return true;
     }
@@ -122,15 +120,18 @@ export default function ChatScreen({ route, navigation }) {
 
   const [stagedMedia, setStagedMedia] = useState(null);
 
-  // НОВОЕ: Состояния для отслеживания прочтений
+  // НОВОЕ: для Markdown-форматирования
+  const [inputSelection, setInputSelection] = useState({ start: 0, end: 0 });
+
+  // Для отслеживания прочтений в группах
   const [messageReads, setMessageReads] = useState({});
   const [readersModalVisible, setReadersModalVisible] = useState(false);
-  const [selectedMessageForReaders, setSelectedMessageForReaders] = useState(null);
   const [readersList, setReadersList] = useState([]);
 
   const typingTimeoutRef = useRef(null);
   const channelRef = useRef(null);
   const flatListRef = useRef(null);
+  const textInputRef = useRef(null);
   const { colors } = useTheme();
   
   const { isRecording, duration, startRecording, stopRecording, cancelRecording } = useAudioRecorder();
@@ -187,13 +188,11 @@ export default function ChatScreen({ route, navigation }) {
     return () => { supabase.removeChannel(channel); };
   }, [chatId]);
 
-  // НОВОЕ: Загрузка и подписка на прочтения сообщений
   useEffect(() => {
     if (!isGroup || messageIds.length === 0) return;
 
     const loadReads = async () => {
       try {
-        // 1. Загружаем прочтения
         const { data: reads, error } = await supabase
           .from('message_reads')
           .select('message_id, user_id')
@@ -204,20 +203,17 @@ export default function ChatScreen({ route, navigation }) {
           return;
         }
 
-        // 2. Получаем уникальные user_id
         const uniqueUserIds = [...new Set(reads.map(r => r.user_id))];
         if (uniqueUserIds.length === 0) {
           setMessageReads({});
           return;
         }
 
-        // 3. Загружаем профили этих пользователей отдельно
         const { data: profiles } = await supabase
           .from('profiles')
           .select('id, username, avatar_url')
           .in('id', uniqueUserIds);
 
-        // 4. Создаём мапу профилей для быстрого поиска
         const profilesMap = {};
         (profiles || []).forEach(p => {
           profilesMap[p.id] = {
@@ -226,16 +222,12 @@ export default function ChatScreen({ route, navigation }) {
           };
         });
 
-        // 5. Собираем итоговую структуру
         const readsMap = {};
         reads.forEach(read => {
           if (!readsMap[read.message_id]) {
             readsMap[read.message_id] = [];
           }
-          const profile = profilesMap[read.user_id] || {
-            username: 'Аноним',
-            avatar_url: null
-          };
+          const profile = profilesMap[read.user_id] || { username: 'Аноним', avatar_url: null };
           readsMap[read.message_id].push({
             user_id: read.user_id,
             username: profile.username,
@@ -252,16 +244,12 @@ export default function ChatScreen({ route, navigation }) {
 
     loadReads();
 
-    // Realtime подписка на новые прочтения
     const readsChannel = supabase
       .channel(`message_reads:${chatId}`)
       .on('postgres_changes', 
         { event: 'INSERT', schema: 'public', table: 'message_reads' },
         async (payload) => {
           const newRead = payload.new;
-          
-          // Проверяем, что это прочтение для нашего чата
-          // (находим сообщение по message_id и проверяем chat_id)
           const { data: msg } = await supabase
             .from('messages')
             .select('chat_id')
@@ -270,7 +258,6 @@ export default function ChatScreen({ route, navigation }) {
 
           if (!msg || msg.chat_id !== chatId) return;
 
-          // Загружаем профиль прочитавшего
           const { data: profile } = await supabase
             .from('profiles')
             .select('username, avatar_url')
@@ -282,7 +269,6 @@ export default function ChatScreen({ route, navigation }) {
             if (!updated[newRead.message_id]) {
               updated[newRead.message_id] = [];
             }
-            // Проверяем, что этого пользователя еще нет в списке (защита от дублей)
             const alreadyExists = updated[newRead.message_id].some(r => r.user_id === newRead.user_id);
             if (!alreadyExists) {
               updated[newRead.message_id].push({
@@ -363,7 +349,6 @@ export default function ChatScreen({ route, navigation }) {
     }
   }, [messages.length, isSearchActive]);
 
-  // НОВОЕ: Обновленная функция пометки сообщений как прочитанных
   const markMessagesAsRead = async (userId) => {
     if (!userId) return;
 
@@ -377,7 +362,6 @@ export default function ChatScreen({ route, navigation }) {
 
       if (!unreadMessages || unreadMessages.length === 0) return;
 
-      // Для личных чатов: обновляем поле is_read
       if (!isGroup) {
         await supabase
           .from('messages')
@@ -385,32 +369,25 @@ export default function ChatScreen({ route, navigation }) {
           .in('id', unreadMessages.map(m => m.id));
       }
       
-      // Для всех чатов: добавляем записи в message_reads
       const readsToInsert = unreadMessages.map(msg => ({
         message_id: msg.id,
         user_id: userId
       }));
 
-      const { error } = await supabase
+      await supabase
         .from('message_reads')
         .upsert(readsToInsert, {
           onConflict: 'message_id,user_id',
           ignoreDuplicates: true
         });
-
-      if (error) {
-        console.error('Ошибка при сохранении прочтений:', error);
-      }
     } catch (err) {
-      console.error('Критическая ошибка в markMessagesAsRead:', err);
+      console.error('Ошибка в markMessagesAsRead:', err);
     }
   };
 
-  // НОВОЕ: Функция просмотра списка прочитавших
   const handleViewReaders = async (message) => {
     const readers = messageReads[message.id] || [];
     setReadersList(readers);
-    setSelectedMessageForReaders(message);
     setReadersModalVisible(true);
   };
 
@@ -419,6 +396,18 @@ export default function ChatScreen({ route, navigation }) {
     if (channelRef.current && newText.trim()) {
       channelRef.current.send({ type: 'broadcast', event: 'typing', payload: { sender_id: currentUserId } });
     }
+  };
+
+  // НОВОЕ: Обработчик кнопок форматирования
+  const handleFormatButton = (marker) => {
+    const result = wrapWithMarkdown(text, inputSelection, marker);
+    setText(result.text);
+    // Возвращаем фокус в поле ввода
+    setTimeout(() => {
+      if (textInputRef.current) {
+        textInputRef.current.focus();
+      }
+    }, 10);
   };
 
   const handleSendOrSave = async () => {
@@ -667,9 +656,10 @@ export default function ChatScreen({ route, navigation }) {
     const isPinned = pinnedMessage?.id === item.id;
     const messageTime = formatTime(item.created_at);
 
-    // НОВОЕ: Получаем количество прочитавших для групповых чатов
     const readers = isGroup ? (messageReads[item.id] || []) : [];
     const readersCount = readers.length;
+
+    const textColor = isMe ? '#fff' : colors.text;
 
     return (
       <Pressable 
@@ -706,10 +696,14 @@ export default function ChatScreen({ route, navigation }) {
           />
         )}
 
-        {hasText && <Text style={[styles.messageText, { color: isMe ? '#fff' : colors.text }, (hasImage || hasVideo) && styles.textOnImage]}>{item.content}</Text>}
+        {/* НОВОЕ: Рендер текста с поддержкой Markdown */}
+        {hasText && (
+          <Text style={[styles.messageText, { color: textColor }, hasImage && styles.textOnImage]}>
+            {parseMarkdown(item.content, textColor, !!hasImage)}
+          </Text>
+        )}
         
         <View style={styles.messageTimeContainer}>
-          {/* НОВОЕ: Для групповых чатов показываем счетчик прочитавших */}
           {isGroup && isMe && readersCount > 0 && (
             <TouchableOpacity 
               style={styles.readersCount}
@@ -722,7 +716,6 @@ export default function ChatScreen({ route, navigation }) {
             </TouchableOpacity>
           )}
           
-          {/* Для личных чатов оставляем старые галочки */}
           {!isGroup && isMe && (
             <Text style={[styles.statusText, (hasImage || hasVideo) && styles.statusOnImage]}>
               {item.is_read ? '✓✓' : '✓'}
@@ -832,7 +825,7 @@ export default function ChatScreen({ route, navigation }) {
           <View style={{ flex: 1 }}>
             <Text style={[styles.pinnedTitle, { color: colors.textSecondary }]}>Закрепленное сообщение</Text>
             <Text style={[styles.pinnedText, { color: colors.text }]} numberOfLines={1}>
-              {pinnedMessage.content || (pinnedMessage.audio_url ? '🎤 Голосовое' : pinnedMessage.video_url ? ' Видео' : pinnedMessage.file_document_url ? `📎 ${pinnedMessage.file_name}` : '📷 Фото')}
+              {pinnedMessage.content || (pinnedMessage.audio_url ? '🎤 Голосовое' : pinnedMessage.video_url ? '🎥 Видео' : pinnedMessage.file_document_url ? `📎 ${pinnedMessage.file_name}` : '📷 Фото')}
             </Text>
           </View>
           {canPin && (
@@ -898,7 +891,7 @@ export default function ChatScreen({ route, navigation }) {
             <Text style={[styles.previewTitle, { color: colors.textSecondary }]}>
               {stagedMedia.type === 'image' && '📷 Предпросмотр фото'}
               {stagedMedia.type === 'video' && '🎥 Предпросмотр видео'}
-              {stagedMedia.type === 'document' && ' Предпросмотр файла'}
+              {stagedMedia.type === 'document' && '📎 Предпросмотр файла'}
               {stagedMedia.type === 'audio' && '🎤 Предпросмотр голосового'}
             </Text>
             <TouchableOpacity onPress={cancelStagedMedia} style={styles.previewCancelButton}>
@@ -962,39 +955,79 @@ export default function ChatScreen({ route, navigation }) {
       )}
 
       {!isRecording && !stagedMedia && (
-        <View style={[styles.inputContainer, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
-          {editingMessage && (
-            <TouchableOpacity style={styles.cancelEditButton} onPress={() => { setEditingMessage(null); setText(''); }}>
-              <Text style={{ color: colors.textSecondary, fontSize: 20 }}>✕</Text>
+        <>
+          {/* НОВОЕ: Панель форматирования Markdown */}
+          <View style={[styles.formatToolbar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+            <TouchableOpacity 
+              style={[styles.formatButton, { backgroundColor: colors.inputBackground }]} 
+              onPress={() => handleFormatButton('**')}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.formatButtonText, { color: colors.text, fontWeight: 'bold' }]}>B</Text>
             </TouchableOpacity>
-          )}
-          <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickImageForPreview} disabled={uploading}>
-            {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>🖼️</Text>}
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickVideoForPreview} disabled={uploading}>
-            {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>🎥</Text>}
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickDocumentForPreview} disabled={uploading}>
-            {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>📎</Text>}
-          </TouchableOpacity>
-          <TextInput 
-            style={[styles.input, { backgroundColor: colors.inputBackground, color: colors.text }]} 
-            value={text} 
-            onChangeText={handleTextChange} 
-            placeholder={editingMessage ? "Изменить сообщение..." : replyingTo ? "Ваш ответ..." : "Напишите сообщение..."} 
-            placeholderTextColor={colors.textSecondary} 
-            multiline 
-          />
-          {text.trim() ? (
-            <TouchableOpacity style={[styles.sendButton, { backgroundColor: colors.primary }]} onPress={handleSendOrSave}>
-              <Text style={styles.sendButtonText}>{editingMessage ? '💾' : '➤'}</Text>
+            <TouchableOpacity 
+              style={[styles.formatButton, { backgroundColor: colors.inputBackground }]} 
+              onPress={() => handleFormatButton('*')}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.formatButtonText, { color: colors.text, fontStyle: 'italic' }]}>I</Text>
             </TouchableOpacity>
-          ) : (
-            <TouchableOpacity style={[styles.sendButton, { backgroundColor: colors.primary }]} onPress={handleStartRecording} disabled={uploading}>
-              <Text style={styles.sendButtonText}>🎤</Text>
+            <TouchableOpacity 
+              style={[styles.formatButton, { backgroundColor: colors.inputBackground }]} 
+              onPress={() => handleFormatButton('`')}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.formatButtonText, { color: colors.text, fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier' }]}>&lt;/&gt;</Text>
             </TouchableOpacity>
-          )}
-        </View>
+            <TouchableOpacity 
+              style={[styles.formatButton, { backgroundColor: colors.inputBackground }]} 
+              onPress={() => handleFormatButton('~~')}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.formatButtonText, { color: colors.text, textDecorationLine: 'line-through' }]}>S</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1 }} />
+            <Text style={[styles.formatHint, { color: colors.textSecondary }]}>
+              **жирный** *курсив* `код` ~~зачёркнутый~~
+            </Text>
+          </View>
+
+          <View style={[styles.inputContainer, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+            {editingMessage && (
+              <TouchableOpacity style={styles.cancelEditButton} onPress={() => { setEditingMessage(null); setText(''); }}>
+                <Text style={{ color: colors.textSecondary, fontSize: 20 }}>✕</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickImageForPreview} disabled={uploading}>
+              {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>🖼️</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickVideoForPreview} disabled={uploading}>
+              {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>🎥</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickDocumentForPreview} disabled={uploading}>
+              {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>📎</Text>}
+            </TouchableOpacity>
+            <TextInput 
+              ref={textInputRef}
+              style={[styles.input, { backgroundColor: colors.inputBackground, color: colors.text }]} 
+              value={text} 
+              onChangeText={handleTextChange}
+              onSelectionChange={(e) => setInputSelection(e.nativeEvent.selection)}
+              placeholder={editingMessage ? "Изменить сообщение..." : replyingTo ? "Ваш ответ..." : "Напишите сообщение..."} 
+              placeholderTextColor={colors.textSecondary} 
+              multiline 
+            />
+            {text.trim() ? (
+              <TouchableOpacity style={[styles.sendButton, { backgroundColor: colors.primary }]} onPress={handleSendOrSave}>
+                <Text style={styles.sendButtonText}>{editingMessage ? '💾' : '➤'}</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={[styles.sendButton, { backgroundColor: colors.primary }]} onPress={handleStartRecording} disabled={uploading}>
+                <Text style={styles.sendButtonText}>🎤</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </>
       )}
 
       {editingMessage && !isRecording && !stagedMedia && (
@@ -1036,7 +1069,7 @@ export default function ChatScreen({ route, navigation }) {
 
               {canPin && selectedMessage?.id !== pinnedMessage?.id && (
                 <TouchableOpacity style={styles.actionMenuItem} activeOpacity={0.7} onPress={() => handlePinMessage(selectedMessage.id)}>
-                  <Text style={[styles.actionMenuText, { color: colors.primary }]}> Закрепить</Text>
+                  <Text style={[styles.actionMenuText, { color: colors.primary }]}>📌 Закрепить</Text>
                 </TouchableOpacity>
               )}
               {pinnedMessage && selectedMessage?.id === pinnedMessage.id && (
@@ -1109,7 +1142,6 @@ export default function ChatScreen({ route, navigation }) {
         </View>
       </Modal>
 
-      {/* НОВОЕ: Модальное окно со списком прочитавших */}
       <Modal visible={readersModalVisible} transparent animationType="fade" onRequestClose={() => setReadersModalVisible(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setReadersModalVisible(false)}>
           <Pressable onPress={(e) => { e.stopPropagation(); }} style={[styles.readersModal, { backgroundColor: colors.surface }]}>
@@ -1131,7 +1163,7 @@ export default function ChatScreen({ route, navigation }) {
                     <Image source={{ uri: item.avatar_url }} style={styles.readerAvatar} />
                   ) : (
                     <View style={[styles.readerAvatarPlaceholder, { backgroundColor: colors.inputBackground }]}>
-                      <Text></Text>
+                      <Text>👤</Text>
                     </View>
                   )}
                   <Text style={[styles.readerName, { color: colors.text }]}>
@@ -1190,18 +1222,8 @@ const styles = StyleSheet.create({
   messageTime: { fontSize: 11, marginLeft: 4 },
   timeOnImage: { color: 'rgba(255,255,255,0.8)', backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4, marginTop: 4 },
 
-  // НОВОЕ: Стили для счетчика прочитавших
-  readersCount: {
-    marginRight: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0,0,0,0.1)',
-  },
-  readersCountText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
+  readersCount: { marginRight: 6, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.1)' },
+  readersCountText: { fontSize: 11, fontWeight: '600' },
 
   reactionsContainer: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 4, paddingHorizontal: 4 },
   reactionEmoji: { fontSize: 16, marginRight: 4, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 10, paddingHorizontal: 4, paddingVertical: 2 },
@@ -1241,6 +1263,31 @@ const styles = StyleSheet.create({
   previewSendButton: { height: 44, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
   previewSendButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
 
+  // НОВОЕ: Стили для панели форматирования
+  formatToolbar: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingHorizontal: 10, 
+    paddingVertical: 6, 
+    borderTopWidth: 1,
+  },
+  formatButton: { 
+    width: 34, 
+    height: 34, 
+    borderRadius: 8, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    marginRight: 6,
+  },
+  formatButtonText: { 
+    fontSize: 14, 
+    fontWeight: '600',
+  },
+  formatHint: { 
+    fontSize: 11, 
+    fontStyle: 'italic',
+  },
+
   inputContainer: { flexDirection: 'row', padding: 10, borderTopWidth: 1, alignItems: 'flex-end' },
   cancelEditButton: { padding: 10, marginRight: 5 },
   attachButton: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 8 },
@@ -1278,51 +1325,12 @@ const styles = StyleSheet.create({
   dateHeaderText: { fontSize: 13, fontWeight: '600', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
   messageWrapper: { marginBottom: 2 },
 
-  // НОВОЕ: Стили для модального окна прочитавших
-  readersModal: {
-    width: '90%',
-    maxHeight: '70%',
-    borderRadius: 20,
-    padding: 20,
-  },
-  readersModalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 15,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.1)',
-  },
-  readersModalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  closeButton: {
-    padding: 5,
-  },
-  readerItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-  },
-  readerAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: 12,
-  },
-  readerAvatarPlaceholder: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  readerName: {
-    fontSize: 15,
-    fontWeight: '500',
-  },
+  readersModal: { width: '90%', maxHeight: '70%', borderRadius: 20, padding: 20 },
+  readersModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.1)' },
+  readersModalTitle: { fontSize: 18, fontWeight: 'bold' },
+  closeButton: { padding: 5 },
+  readerItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1 },
+  readerAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 12 },
+  readerAvatarPlaceholder: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  readerName: { fontSize: 15, fontWeight: '500' },
 });
