@@ -1,27 +1,51 @@
 // screens/CallScreen.js
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
 
-const APP_ID = 'f3912d4cb8b147428bd8448eefe89d36'; // Вставь свой App ID
+// TURN-серверы OpenRelay (бесплатные)
+const TURN_SERVERS = [
+  {
+    urls: 'stun:stun.l.google.com:19302'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  }
+];
 
-// Правильный импорт для разных платформ
+// Импорты для разных платформ
 let AgoraRTC = null;
-let RtcEngine = null;
-let RtcLocalView = null;
-let RtcRemoteView = null;
+let RTCPeerConnection = null;
+let RTCSessionDescription = null;
+let RTCIceCandidate = null;
+let mediaDevices = null;
 
 if (Platform.OS === 'web') {
-  // Для веба используем динамический импорт
-  const AgoraWeb = require('agora-rtc-sdk-ng');
-  AgoraRTC = AgoraWeb.default || AgoraWeb;
+  // Для веба используем нативный WebRTC API браузера
+  RTCPeerConnection = window.RTCPeerConnection;
+  RTCSessionDescription = window.RTCSessionDescription;
+  RTCIceCandidate = window.RTCIceCandidate;
+  mediaDevices = navigator.mediaDevices;
 } else {
   // Для мобильных устройств
-  const Agora = require('react-native-agora');
-  RtcEngine = Agora.createAgoraRtcEngine;
-  RtcLocalView = Agora.RtcLocalView;
-  RtcRemoteView = Agora.RtcRemoteView;
+  const WebRTC = require('react-native-webrtc');
+  RTCPeerConnection = WebRTC.RTCPeerConnection;
+  RTCSessionDescription = WebRTC.RTCSessionDescription;
+  RTCIceCandidate = WebRTC.RTCIceCandidate;
+  mediaDevices = WebRTC.mediaDevices;
 }
 
 export default function CallScreen({ route, navigation }) {
@@ -36,116 +60,214 @@ export default function CallScreen({ route, navigation }) {
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const clientRef = useRef(null);
-  const localTrackRef = useRef(null);
-  const engineRef = useRef(null);
-  const [remoteUid, setRemoteUid] = useState(null);
+  const pcRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const channelRef = useRef(null);
   const timerRef = useRef(null);
 
+  // Буфер для ICE-кандидатов
+  const pendingIceRef = useRef([]);
+  const remoteDescSetRef = useRef(false);
+
   useEffect(() => {
-    if (Platform.OS === 'web') {
-      initWebCall();
-    } else {
-      initMobileCall();
-    }
+    initCall();
     return () => {
       endCall();
     };
   }, []);
 
-  const fetchAgoraToken = async () => {
+  const fetchToken = async () => {
     try {
       const { data, error } = await supabase.functions.invoke('generate-agora-token', {
         body: { chatId, isVideoCall }
       });
-
       if (error) throw error;
       return data;
     } catch (err) {
       console.error('Ошибка получения токена:', err);
-      throw new Error('Не удалось получить токен для звонка');
+      throw new Error('Не удалось получить токен');
     }
   };
 
-  const initWebCall = async () => {
+  const applyPendingIce = async () => {
+    if (pendingIceRef.current.length > 0 && pcRef.current) {
+      console.log(`Применяем ${pendingIceRef.current.length} ICE-кандидатов`);
+      for (const candidate of pendingIceRef.current) {
+        try {
+          await pcRef.current.addIceCandidate(candidate);
+        } catch (e) {
+          console.error('Ошибка ICE:', e);
+        }
+      }
+      pendingIceRef.current = [];
+    }
+  };
+
+  const initCall = async () => {
     try {
-      const { token, uid } = await fetchAgoraToken();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Не авторизован');
 
-      const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
-      clientRef.current = client;
-
-      client.on('user-published', async (user, mediaType) => {
-        await client.subscribe(user, mediaType);
-        if (mediaType === 'video' && remoteVideoRef.current) {
-          user.videoTrack.play(remoteVideoRef.current);
-        }
-        if (mediaType === 'audio') {
-          user.audioTrack.play();
-        }
-        setStatus('connected');
-        startTimer();
+      // Получаем доступ к микрофону/камере
+      const stream = await mediaDevices.getUserMedia({ 
+        audio: true, 
+        video: isVideoCall 
       });
+      localStreamRef.current = stream;
 
-      client.on('user-unpublished', (user) => {
-        if (remoteVideoRef.current) {
-          user.videoTrack?.stop();
-        }
-      });
-
-      const [microphoneTrack, cameraTrack] = await AgoraRTC.createMicrophoneAndCameraTracks({
-        video: { enabled: isVideoCall }
-      });
-      localTrackRef.current = { microphoneTrack, cameraTrack };
-
-      if (isVideoCall && localVideoRef.current) {
-        cameraTrack.play(localVideoRef.current);
+      // Для веба: показываем локальное видео
+      if (Platform.OS === 'web' && localVideoRef.current && isVideoCall) {
+        localVideoRef.current.srcObject = stream;
       }
 
-      const channelName = `chat_${chatId}`;
-      await client.join(APP_ID, channelName, token, uid);
-      await client.publish([microphoneTrack, cameraTrack]);
-
-      setStatus('ringing');
-    } catch (err) {
-      console.error('Web Call Error:', err);
-      setError(err.message || 'Ошибка подключения');
-      setStatus('ended');
-    }
-  };
-
-  const initMobileCall = async () => {
-    try {
-      const { token, uid } = await fetchAgoraToken();
-
-      const engine = RtcEngine();
-      engineRef.current = engine;
-
-      engine.initialize({
-        appId: APP_ID,
-        channelProfile: ChannelProfileType.ChannelProfileCommunication,
+      // Создаем RTCPeerConnection
+      const pc = new RTCPeerConnection({
+        iceServers: TURN_SERVERS
       });
+      pcRef.current = pc;
 
-      engine.enableVideo();
-      engine.setChannelProfile(ChannelProfileType.ChannelProfileCommunication);
-      engine.setClientRole(ClientRoleType.ClientRoleBroadcaster);
+      // Добавляем треки
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      engine.addListener('onUserJoined', (uid, elapsed) => {
-        setRemoteUid(uid);
+      // Обработка ICE-кандидатов
+      pc.onicecandidate = (event) => {
+        if (event.candidate && channelRef.current) {
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'ice-candidate',
+            payload: {
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+              target: route.params?.targetUserId
+            }
+          });
+        }
+      };
+
+      // Обработка удаленного трека
+      pc.ontrack = (event) => {
+        console.log('Получен удаленный трек');
+        if (Platform.OS === 'web' && remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = event.streams[0];
+        }
         setStatus('connected');
         startTimer();
+      };
+
+      // Обработка состояния соединения
+      pc.onconnectionstatechange = () => {
+        console.log('Состояние соединения:', pc.connectionState);
+        if (pc.connectionState === 'failed') {
+          setError('Соединение не удалось. Проверьте интернет.');
+          setStatus('ended');
+        }
+      };
+
+      // Подключаемся к каналу сигнализации
+      const channel = supabase.channel(`call:${chatId}`, {
+        config: { broadcast: { self: true } }
       });
 
-      engine.addListener('onUserOffline', (uid, reason) => {
-        setRemoteUid(null);
+      // Обработка Offer
+      channel.on('broadcast', { event: 'offer' }, async ({ payload: sdPayload }) => {
+        if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
+          console.log('Получен offer');
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription({
+              type: sdPayload.type,
+              sdp: sdPayload.sdp
+            }));
+            remoteDescSetRef.current = true;
+            await applyPendingIce();
+
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            
+            channel.send({
+              type: 'broadcast',
+              event: 'answer',
+              payload: {
+                sdp: pc.localDescription.sdp,
+                type: pc.localDescription.type,
+                target: sdPayload.sender_id
+              }
+            });
+          } catch (err) {
+            console.error('Ошибка обработки offer:', err);
+          }
+        }
       });
 
-      const channelName = `chat_${chatId}`;
-      engine.joinChannel(token, channelName, null, uid);
+      // Обработка Answer
+      channel.on('broadcast', { event: 'answer' }, async ({ payload: sdPayload }) => {
+        if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
+          console.log('Получен answer');
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription({
+              type: sdPayload.type,
+              sdp: sdPayload.sdp
+            }));
+            remoteDescSetRef.current = true;
+            await applyPendingIce();
+          } catch (err) {
+            console.error('Ошибка обработки answer:', err);
+          }
+        }
+      });
 
-      setStatus('ringing');
+      // Обработка ICE-кандидатов
+      channel.on('broadcast', { event: 'ice-candidate' }, async ({ payload: icePayload }) => {
+        if (icePayload.sender_id !== user.id && icePayload.candidate) {
+          const candidate = new RTCIceCandidate({
+            candidate: icePayload.candidate,
+            sdpMid: icePayload.sdpMid,
+            sdpMLineIndex: icePayload.sdpMLineIndex
+          });
+
+          if (remoteDescSetRef.current) {
+            try {
+              await pc.addIceCandidate(candidate);
+            } catch (e) {
+              console.error('Ошибка ICE:', e);
+            }
+          } else {
+            console.log('Буферизуем ICE-кандидат');
+            pendingIceRef.current.push(candidate);
+          }
+        }
+      });
+
+      channel.on('broadcast', { event: 'hangup' }, () => {
+        setStatus('ended');
+        setTimeout(() => navigation.goBack(), 2000);
+      });
+
+      channel.subscribe();
+      channelRef.current = channel;
+
+      // Если мы инициатор - создаем Offer
+      if (route.params?.callerId === user.id) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        channel.send({
+          type: 'broadcast',
+          event: 'offer',
+          payload: {
+            sdp: pc.localDescription.sdp,
+            type: pc.localDescription.type,
+            target: route.params?.targetUserId
+          }
+        });
+        setStatus('ringing');
+      } else {
+        setStatus('ringing');
+      }
+
     } catch (err) {
-      console.error('Mobile Call Error:', err);
-      setError(err.message || 'Ошибка инициализации');
+      console.error('Ошибка инициализации:', err);
+      setError(err.message || 'Ошибка подключения');
       setStatus('ended');
     }
   };
@@ -161,48 +283,36 @@ export default function CallScreen({ route, navigation }) {
     return `${m}:${s}`;
   };
 
-  const toggleMute = async () => {
-    if (Platform.OS === 'web') {
-      if (localTrackRef.current?.microphoneTrack) {
-        await localTrackRef.current.microphoneTrack.setEnabled(!isMuted);
-        setIsMuted(!isMuted);
-      }
-    } else {
-      if (engineRef.current) {
-        engineRef.current.muteLocalAudioStream(!isMuted);
+  const toggleMute = () => {
+    if (localStreamRef.current) {
+      const audioTrack = localStreamRef.current.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
         setIsMuted(!isMuted);
       }
     }
   };
 
-  const toggleVideo = async () => {
-    if (Platform.OS === 'web') {
-      if (localTrackRef.current?.cameraTrack) {
-        await localTrackRef.current.cameraTrack.setEnabled(!isVideoOff);
-        setIsVideoOff(!isVideoOff);
-      }
-    } else {
-      if (engineRef.current) {
-        engineRef.current.muteLocalVideoStream(!isVideoOff);
+  const toggleVideo = () => {
+    if (localStreamRef.current) {
+      const videoTrack = localStreamRef.current.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
         setIsVideoOff(!isVideoOff);
       }
     }
   };
 
-  const endCall = async () => {
-    if (Platform.OS === 'web') {
-      if (localTrackRef.current) {
-        localTrackRef.current.microphoneTrack?.close();
-        localTrackRef.current.cameraTrack?.close();
-      }
-      if (clientRef.current) {
-        await clientRef.current.leave();
-      }
-    } else {
-      if (engineRef.current) {
-        engineRef.current.leaveChannel();
-        engineRef.current.release();
-      }
+  const endCall = () => {
+    if (channelRef.current) {
+      channelRef.current.send({ type: 'broadcast', event: 'hangup', payload: {} });
+      supabase.removeChannel(channelRef.current);
+    }
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+    if (pcRef.current) {
+      pcRef.current.close();
     }
     if (timerRef.current) clearInterval(timerRef.current);
     setStatus('ended');
@@ -212,24 +322,17 @@ export default function CallScreen({ route, navigation }) {
     <View style={[styles.container, { backgroundColor: '#1a1a1a' }]}>
       {isVideoCall && status === 'connected' && (
         Platform.OS === 'web' ? (
-          <div ref={remoteVideoRef} style={styles.remoteVideoWeb} />
+          <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideoWeb} />
         ) : (
-          <RtcRemoteView.SurfaceView
-            style={styles.remoteVideoMobile}
-            uid={remoteUid || 0}
-            channelId={`chat_${chatId}`}
-          />
+          <View style={styles.remoteVideoMobile} />
         )
       )}
 
       {isVideoCall && (
         Platform.OS === 'web' ? (
-          <div ref={localVideoRef} style={styles.localVideoWeb} />
+          <video ref={localVideoRef} autoPlay playsInline muted style={styles.localVideoWeb} />
         ) : (
-          <RtcLocalView.SurfaceView
-            style={styles.localVideoMobile}
-            channelId={`chat_${chatId}`}
-          />
+          <View style={styles.localVideoMobile} />
         )
       )}
 
@@ -255,7 +358,7 @@ export default function CallScreen({ route, navigation }) {
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '' : '📹'}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
