@@ -192,35 +192,85 @@ export default function ChatScreen({ route, navigation }) {
     if (!isGroup || messageIds.length === 0) return;
 
     const loadReads = async () => {
-      const { data: reads } = await supabase
-        .from('message_reads')
-        .select('message_id, user_id, profiles(username, avatar_url)')
-        .in('message_id', messageIds);
+      try {
+        // 1. Загружаем прочтения
+        const { data: reads, error } = await supabase
+          .from('message_reads')
+          .select('message_id, user_id')
+          .in('message_id', messageIds);
 
-      if (reads) {
+        if (error || !reads || reads.length === 0) {
+          setMessageReads({});
+          return;
+        }
+
+        // 2. Получаем уникальные user_id
+        const uniqueUserIds = [...new Set(reads.map(r => r.user_id))];
+        if (uniqueUserIds.length === 0) {
+          setMessageReads({});
+          return;
+        }
+
+        // 3. Загружаем профили этих пользователей отдельно
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, username, avatar_url')
+          .in('id', uniqueUserIds);
+
+        // 4. Создаём мапу профилей для быстрого поиска
+        const profilesMap = {};
+        (profiles || []).forEach(p => {
+          profilesMap[p.id] = {
+            username: p.username || 'Аноним',
+            avatar_url: p.avatar_url
+          };
+        });
+
+        // 5. Собираем итоговую структуру
         const readsMap = {};
         reads.forEach(read => {
           if (!readsMap[read.message_id]) {
             readsMap[read.message_id] = [];
           }
+          const profile = profilesMap[read.user_id] || {
+            username: 'Аноним',
+            avatar_url: null
+          };
           readsMap[read.message_id].push({
             user_id: read.user_id,
-            username: read.profiles?.username || 'Аноним',
-            avatar_url: read.profiles?.avatar_url
+            username: profile.username,
+            avatar_url: profile.avatar_url
           });
         });
+
         setMessageReads(readsMap);
+      } catch (err) {
+        console.error('Ошибка загрузки прочтений:', err);
+        setMessageReads({});
       }
     };
 
     loadReads();
 
+    // Realtime подписка на новые прочтения
     const readsChannel = supabase
       .channel(`message_reads:${chatId}`)
       .on('postgres_changes', 
         { event: 'INSERT', schema: 'public', table: 'message_reads' },
         async (payload) => {
           const newRead = payload.new;
+          
+          // Проверяем, что это прочтение для нашего чата
+          // (находим сообщение по message_id и проверяем chat_id)
+          const { data: msg } = await supabase
+            .from('messages')
+            .select('chat_id')
+            .eq('id', newRead.message_id)
+            .single();
+
+          if (!msg || msg.chat_id !== chatId) return;
+
+          // Загружаем профиль прочитавшего
           const { data: profile } = await supabase
             .from('profiles')
             .select('username, avatar_url')
@@ -232,11 +282,15 @@ export default function ChatScreen({ route, navigation }) {
             if (!updated[newRead.message_id]) {
               updated[newRead.message_id] = [];
             }
-            updated[newRead.message_id].push({
-              user_id: newRead.user_id,
-              username: profile?.username || 'Аноним',
-              avatar_url: profile?.avatar_url
-            });
+            // Проверяем, что этого пользователя еще нет в списке (защита от дублей)
+            const alreadyExists = updated[newRead.message_id].some(r => r.user_id === newRead.user_id);
+            if (!alreadyExists) {
+              updated[newRead.message_id].push({
+                user_id: newRead.user_id,
+                username: profile?.username || 'Аноним',
+                avatar_url: profile?.avatar_url
+              });
+            }
             return updated;
           });
         }
@@ -313,17 +367,22 @@ export default function ChatScreen({ route, navigation }) {
   const markMessagesAsRead = async (userId) => {
     if (!userId) return;
 
-    const { data: unreadMessages } = await supabase
-      .from('messages')
-      .select('id')
-      .eq('chat_id', chatId)
-      .neq('sender_id', userId)
-      .eq('is_read', false);
+    try {
+      const { data: unreadMessages } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('chat_id', chatId)
+        .neq('sender_id', userId)
+        .eq('is_read', false);
 
-    if (unreadMessages && unreadMessages.length > 0) {
+      if (!unreadMessages || unreadMessages.length === 0) return;
+
       // Для личных чатов: обновляем поле is_read
       if (!isGroup) {
-        await supabase.from('messages').update({ is_read: true }).in('id', unreadMessages.map(m => m.id));
+        await supabase
+          .from('messages')
+          .update({ is_read: true })
+          .in('id', unreadMessages.map(m => m.id));
       }
       
       // Для всех чатов: добавляем записи в message_reads
@@ -332,9 +391,18 @@ export default function ChatScreen({ route, navigation }) {
         user_id: userId
       }));
 
-      await supabase.from('message_reads').upsert(readsToInsert, {
-        onConflict: 'message_id,user_id'
-      });
+      const { error } = await supabase
+        .from('message_reads')
+        .upsert(readsToInsert, {
+          onConflict: 'message_id,user_id',
+          ignoreDuplicates: true
+        });
+
+      if (error) {
+        console.error('Ошибка при сохранении прочтений:', error);
+      }
+    } catch (err) {
+      console.error('Критическая ошибка в markMessagesAsRead:', err);
     }
   };
 
