@@ -33,6 +33,7 @@ export default function CallScreen({ route, navigation }) {
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState(null);
   const [hasAudio, setHasAudio] = useState(true);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -45,24 +46,26 @@ export default function CallScreen({ route, navigation }) {
   const pendingIceRef = useRef([]);
   const remoteDescSetRef = useRef(false);
   const audioContextRef = useRef(null);
+  const audioSourceRef = useRef(null);
+  const audioDestinationRef = useRef(null);
 
   useEffect(() => {
     initCall();
     
-    // НОВОЕ: Разблокировка аудио при первом клике
+    // Разблокировка аудио при первом клике
     const unlockAudio = () => {
       if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
         audioContextRef.current.resume().then(() => {
-          console.log('Аудио разблокировано пользователем');
-        });
-      }
-      
-      // Принудительно запускаем аудио элемент
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.play().then(() => {
-          console.log('Аудио запущено после клика');
-        }).catch(err => {
-          console.log('Не удалось запустить аудио:', err);
+          console.log('✅ AudioContext разблокирован');
+          setAudioUnlocked(true);
+          
+          // Переподключаем аудио после разблокировки
+          if (remoteStreamRef.current && audioSourceRef.current) {
+            console.log('Переподключаем аудио к AudioContext');
+            audioSourceRef.current.disconnect();
+            audioSourceRef.current = audioContextRef.current.createMediaStreamSource(remoteStreamRef.current);
+            audioSourceRef.current.connect(audioDestinationRef.current);
+          }
         });
       }
     };
@@ -182,7 +185,7 @@ export default function CallScreen({ route, navigation }) {
         }
       };
 
-      // НОВОЕ: Обработка удаленного трека с гарантированным воспроизведением
+      // НОВОЕ: Обработка удаленного трека с AudioContext
       pc.ontrack = (event) => {
         console.log('Получен трек:', event.track.kind);
         console.log('Трек enabled:', event.track.enabled);
@@ -200,41 +203,32 @@ export default function CallScreen({ route, navigation }) {
             });
           }
           
-          // НОВОЕ: Принудительное воспроизведение аудио
-          if (event.track.kind === 'audio' && remoteAudioRef.current) {
-            console.log('Настраиваем аудио элемент');
+          // НОВОЕ: Используем AudioContext для обхода autoplay policy
+          if (event.track.kind === 'audio') {
+            console.log('Настраиваем аудио через AudioContext');
             
-            // Создаем аудио-контекст если нет
+            // Создаем AudioContext если нет
             if (!audioContextRef.current) {
               audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+              console.log('AudioContext создан, состояние:', audioContextRef.current.state);
             }
             
-            // Разблокируем аудио-контекст
+            // Создаем MediaStreamSource
+            audioSourceRef.current = audioContextRef.current.createMediaStreamSource(event.streams[0]);
+            
+            // Подключаем к destination (динамикам)
+            audioDestinationRef.current = audioContextRef.current.destination;
+            audioSourceRef.current.connect(audioDestinationRef.current);
+            
+            console.log('Аудио подключено к AudioContext');
+            
+            // Если AudioContext уже разблокирован, резюмеруем
             if (audioContextRef.current.state === 'suspended') {
-              audioContextRef.current.resume().then(() => {
-                console.log('Аудио-контекст разблокирован');
-              });
-            }
-            
-            // Настраиваем аудио элемент
-            remoteAudioRef.current.srcObject = event.streams[0];
-            remoteAudioRef.current.volume = 1.0;
-            remoteAudioRef.current.muted = false;
-            remoteAudioRef.current.autoplay = true;
-            
-            // Принудительно запускаем
-            const playPromise = remoteAudioRef.current.play();
-            
-            if (playPromise !== undefined) {
-              playPromise.then(() => {
-                console.log('✅ Аудио запущено успешно!');
-              }).catch(err => {
-                console.error('❌ Ошибка автовоспроизведения:', err);
-                console.log('Нужно взаимодействие пользователя для запуска аудио');
-                
-                // Показываем подсказку
-                setError('Нажмите на экран для включения звука');
-              });
+              console.log('AudioContext suspended, ждем клика пользователя');
+              setError('Нажмите на экран для включения звука');
+            } else {
+              console.log('✅ AudioContext уже активен, звук должен идти');
+              setAudioUnlocked(true);
             }
           }
         }
@@ -396,15 +390,7 @@ export default function CallScreen({ route, navigation }) {
     <View style={[styles.container, { backgroundColor: '#1a1a1a' }]}>
       {isVideoCall && status === 'connected' && (
         Platform.OS === 'web' ? (
-          <>
-            <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideoWeb} />
-            <audio 
-              ref={remoteAudioRef} 
-              autoPlay 
-              playsInline
-              style={{ display: 'none' }}
-            />
-          </>
+          <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideoWeb} />
         ) : (
           <View style={styles.remoteVideoMobile} />
         )
@@ -439,20 +425,20 @@ export default function CallScreen({ route, navigation }) {
           <View style={styles.controls}>
             {hasAudio && (
               <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
-                <Text style={styles.controlIcon}>{isMuted ? '🔇' : '🎤'}</Text>
+                <Text style={styles.controlIcon}>{isMuted ? '🔇' : ''}</Text>
                 <Text style={styles.controlText}>{isMuted ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : ''}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
 
             <TouchableOpacity style={[styles.controlBtn, styles.hangupBtn]} onPress={endCall}>
-              <Text style={styles.controlIcon}></Text>
+              <Text style={styles.controlIcon}>📞</Text>
               <Text style={styles.controlText}>Завершить</Text>
             </TouchableOpacity>
           </View>
