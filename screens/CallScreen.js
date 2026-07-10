@@ -1,7 +1,7 @@
 // screens/CallScreen.js
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
-import { supabase } from '../lib/supabase'; // ИМПОРТ SUPABASE
+import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
 import Peer from 'peerjs';
 
@@ -18,6 +18,7 @@ export default function CallScreen({ route, navigation }) {
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const remoteAudioRef = useRef(null);
   const peerRef = useRef(null);
   const callRef = useRef(null);
   const localStreamRef = useRef(null);
@@ -36,12 +37,10 @@ export default function CallScreen({ route, navigation }) {
       if (!user) throw new Error('Не авторизован');
 
       // Создаём Peer с уникальным ID (user.id)
+      // ИСПОЛЬЗУЕМ ПУБЛИЧНЫЙ PEERJS CLOUD SERVER
       const peer = new Peer(user.id, {
         debug: 2,
-        // Используем российский хост PeerJS (если есть) или стандартный
-        host: '/',
-        port: 443,
-        secure: true
+        // Не указываем host/port — используем облачный сервер PeerJS по умолчанию
       });
 
       peerRef.current = peer;
@@ -93,6 +92,15 @@ export default function CallScreen({ route, navigation }) {
           console.error('Ошибка воспроизведения:', err);
         });
       }
+      
+      // Отдельно для аудио
+      if (Platform.OS === 'web' && remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.play().catch(err => {
+          console.error('Ошибка воспроизведения аудио:', err);
+        });
+      }
+      
       setStatus('connected');
       startTimer();
     });
