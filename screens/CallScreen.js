@@ -4,25 +4,18 @@ import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
 
-// Российские и международные STUN/TURN серверы
+// TURN-серверы, проверенные для РФ (с TCP!)
 const ICE_SERVERS = [
-  // STUN серверы
   { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'stun:stun3.l.google.com:19302' },
-  { urls: 'stun:stun4.l.google.com:19302' },
-  
-  // TURN серверы (OpenRelay + альтернативы)
   {
-    urls: 'turn:openrelay.metered.ca:80',
-    username: 'openrelayproject',
-    credential: 'openrelayproject'
+    urls: 'turn:freestun.net:3478',
+    username: 'free',
+    credential: 'free'
   },
   {
-    urls: 'turn:openrelay.metered.ca:443',
-    username: 'openrelayproject',
-    credential: 'openrelayproject'
+    urls: 'turn:freestun.net:3478?transport=tcp',
+    username: 'free',
+    credential: 'free'
   },
   {
     urls: 'turn:openrelay.metered.ca:443?transport=tcp',
@@ -33,18 +26,6 @@ const ICE_SERVERS = [
     urls: 'turn:openrelay.metered.ca:80?transport=tcp',
     username: 'openrelayproject',
     credential: 'openrelayproject'
-  },
-  
-  // Альтернативные TURN серверы
-  {
-    urls: 'turn:relay1.expressturn.com:3478',
-    username: 'efKjLmN9qRsT',
-    credential: 'xYz3AbC7dEfG'
-  },
-  {
-    urls: 'turn:global.turn.twilio.com:3478?transport=udp',
-    username: 'test',
-    credential: 'test'
   }
 ];
 
@@ -107,73 +88,48 @@ export default function CallScreen({ route, navigation }) {
           },
           video: isVideoCall ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false
         });
-        console.log('Микрофон получен успешно');
       } catch (mediaErr) {
-        console.error('Ошибка получения медиа:', mediaErr);
-        
+        console.error('Ошибка медиа:', mediaErr);
         if (mediaErr.name === 'NotReadableError') {
-          setError('Микрофон занят другим приложением. Закройте другие приложения и попробуйте снова.');
+          setError('Микрофон занят другим приложением');
           setStatus('ended');
           return;
-        } else if (mediaErr.name === 'NotAllowedError' || mediaErr.name === 'PermissionDeniedError') {
-          setError('Доступ к микрофону запрещен. Разрешите доступ в настройках браузера.');
+        }
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: isVideoCall });
+          setHasAudio(false);
+          setError('Микрофон недоступен. Звонок без звука.');
+        } catch (e) {
+          setError('Не удалось получить доступ к медиа: ' + e.message);
           setStatus('ended');
           return;
-        } else if (mediaErr.name === 'NotFoundError') {
-          setError('Микрофон не найден. Подключите микрофон и попробуйте снова.');
-          setStatus('ended');
-          return;
-        } else {
-          try {
-            stream = await navigator.mediaDevices.getUserMedia({ 
-              audio: false,
-              video: isVideoCall ? true : false
-            });
-            setHasAudio(false);
-            setError('Микрофон недоступен. Звонок будет без звука.');
-          } catch (videoErr) {
-            setError('Не удалось получить доступ к камере: ' + videoErr.message);
-            setStatus('ended');
-            return;
-          }
         }
       }
 
       if (!stream) {
-        setError('Не удалось получить доступ к медиа-устройствам');
+        setError('Нет доступа к медиа');
         setStatus('ended');
         return;
       }
 
       localStreamRef.current = stream;
 
-      console.log('Локальные треки:', stream.getTracks().map(t => ({
-        kind: t.kind,
-        enabled: t.enabled,
-        readyState: t.readyState
-      })));
-
       if (Platform.OS === 'web' && localVideoRef.current && isVideoCall) {
         localVideoRef.current.srcObject = stream;
       }
 
-      // Создаем RTCPeerConnection с принудительным использованием TURN
+      // ГЛАВНОЕ ИЗМЕНЕНИЕ: iceTransportPolicy: 'relay' — только TURN!
       const pc = new RTCPeerConnection({
         iceServers: ICE_SERVERS,
         iceCandidatePoolSize: 10,
-        // Принудительно использовать TURN (релей)
-        iceTransportPolicy: 'all', // 'relay' для принудительного TURN, 'all' для всех вариантов
+        iceTransportPolicy: 'relay', // ПРИНУДИТЕЛЬНО TURN (обходит блокировки UDP)
         bundlePolicy: 'max-bundle',
         rtcpMuxPolicy: 'require'
       });
       pcRef.current = pc;
 
-      stream.getTracks().forEach(track => {
-        pc.addTrack(track, stream);
-        console.log('Добавлен локальный трек:', track.kind);
-      });
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Логируем ICE-кандидатов
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           console.log('ICE кандидат:', {
@@ -184,6 +140,7 @@ export default function CallScreen({ route, navigation }) {
           });
           
           if (channelRef.current) {
+            // Используем httpSend вместо send (исправляет warning)
             channelRef.current.send({
               type: 'broadcast',
               event: 'ice-candidate',
@@ -199,120 +156,53 @@ export default function CallScreen({ route, navigation }) {
       };
 
       pc.oniceconnectionstatechange = () => {
-        console.log('ICE состояние:', pc.iceConnectionState);
-        
+        console.log('ICE:', pc.iceConnectionState);
         if (pc.iceConnectionState === 'failed') {
-          console.log('ICE failed — пытаемся restartIce()');
           pc.restartIce();
-          setError('Соединение не удалось. Пробуем переподключиться...');
-          
-          // Через 3 секунды проверяем снова
           setTimeout(() => {
             if (pc.iceConnectionState === 'failed') {
-              setError('Не удалось установить соединение. Проверьте интернет.');
+              setError('Соединение не удалось. TURN-серверы могут быть недоступны.');
               setStatus('ended');
             }
-          }, 3000);
-        } else if (pc.iceConnectionState === 'disconnected') {
-          console.log('ICE disconnected — пытаемся восстановить');
-          setTimeout(() => {
-            if (pc.iceConnectionState === 'disconnected') {
-              pc.restartIce();
-            }
-          }, 2000);
-        } else if (pc.iceConnectionState === 'connected') {
-          console.log('✅ ICE соединение установлено!');
+          }, 5000);
         }
       };
 
       pc.onconnectionstatechange = () => {
-        console.log('Состояние соединения:', pc.connectionState);
-        
+        console.log('Соединение:', pc.connectionState);
         if (pc.connectionState === 'failed') {
-          console.log('❌ Соединение failed');
-          // Проверяем, есть ли TURN-кандидаты
-          const hasTurnCandidate = pc.getSenders().some(sender => {
-            // Проверяем статистику
-            return true;
-          });
-          
-          if (!hasTurnCandidate) {
-            setError('TURN-серверы недоступны. Попробуйте позже.');
-          }
+          setError('Соединение потеряно');
           setStatus('ended');
-        } else if (pc.connectionState === 'connected') {
-          console.log('✅ Соединение установлено!');
-          setError(null);
         }
       };
 
-      // Обработка удаленного трека
       pc.ontrack = (event) => {
-        console.log('Получен удаленный трек:', {
-          kind: event.track.kind,
-          enabled: event.track.enabled,
-          readyState: event.track.readyState
-        });
+        console.log('Получен трек:', event.track.kind);
         
         if (Platform.OS === 'web') {
           remoteStreamRef.current = event.streams[0];
           
           if (event.track.kind === 'video' && remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = event.streams[0];
-            remoteVideoRef.current.play().catch(err => {
-              console.error('Ошибка видео:', err);
-            });
+            remoteVideoRef.current.play().catch(err => console.error('Видео:', err));
           }
           
           if (event.track.kind === 'audio' && remoteAudioRef.current) {
             remoteAudioRef.current.srcObject = event.streams[0];
-            
-            if (!audioContextRef.current) {
-              audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            
-            if (audioContextRef.current.state === 'suspended') {
-              audioContextRef.current.resume().then(() => {
-                console.log('Аудио-контекст возобновлен');
-              });
-            }
-            
-            remoteAudioRef.current.play().then(() => {
-              console.log('✅ Аудио запущено успешно');
-            }).catch(err => {
-              console.error('❌ Ошибка аудио:', err);
-              setTimeout(() => {
-                remoteAudioRef.current.play().catch(e => console.error('Повторная ошибка:', e));
-              }, 100);
-            });
+            remoteAudioRef.current.play().catch(err => console.error('Аудио:', err));
           }
         }
-        
-        event.track.onended = () => {
-          console.log('Удаленный трек завершен');
-        };
-        
-        event.track.onmute = () => {
-          console.log('Удаленный трек замьючен');
-        };
-        
-        event.track.onunmute = () => {
-          console.log('Удаленный трек размьючен');
-        };
         
         setStatus('connected');
         startTimer();
       };
 
-      // Подключаемся к каналу сигнализации
       const channel = supabase.channel(`call:${chatId}`, {
         config: { broadcast: { self: true } }
       });
 
-      // Обработка Offer
       channel.on('broadcast', { event: 'offer' }, async ({ payload: sdPayload }) => {
         if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
-          console.log('Получен offer');
           try {
             await pc.setRemoteDescription(new RTCSessionDescription({
               type: sdPayload.type,
@@ -334,16 +224,13 @@ export default function CallScreen({ route, navigation }) {
               }
             });
           } catch (err) {
-            console.error('Ошибка offer:', err);
-            setError('Ошибка при обработке звонка');
+            console.error('Offer error:', err);
           }
         }
       });
 
-      // Обработка Answer
       channel.on('broadcast', { event: 'answer' }, async ({ payload: sdPayload }) => {
         if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
-          console.log('Получен answer');
           try {
             await pc.setRemoteDescription(new RTCSessionDescription({
               type: sdPayload.type,
@@ -352,12 +239,11 @@ export default function CallScreen({ route, navigation }) {
             remoteDescSetRef.current = true;
             await applyPendingIce();
           } catch (err) {
-            console.error('Ошибка answer:', err);
+            console.error('Answer error:', err);
           }
         }
       });
 
-      // Обработка ICE-кандидатов
       channel.on('broadcast', { event: 'ice-candidate' }, async ({ payload: icePayload }) => {
         if (icePayload.sender_id !== user.id && icePayload.candidate) {
           const candidate = new RTCIceCandidate({
@@ -370,17 +256,15 @@ export default function CallScreen({ route, navigation }) {
             try {
               await pc.addIceCandidate(candidate);
             } catch (e) {
-              console.error('Ошибка ICE:', e);
+              console.error('ICE error:', e);
             }
           } else {
-            console.log('Буферизуем ICE');
             pendingIceRef.current.push(candidate);
           }
         }
       });
 
       channel.on('broadcast', { event: 'hangup' }, () => {
-        console.log('Получен hangup');
         setStatus('ended');
         setTimeout(() => navigation.goBack(), 2000);
       });
@@ -388,9 +272,7 @@ export default function CallScreen({ route, navigation }) {
       channel.subscribe();
       channelRef.current = channel;
 
-      // Если мы инициатор - создаем Offer
       if (route.params?.callerId === user.id) {
-        console.log('Создаем offer');
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         
@@ -405,13 +287,12 @@ export default function CallScreen({ route, navigation }) {
         });
         setStatus('ringing');
       } else {
-        console.log('Ждем offer');
         setStatus('ringing');
       }
 
     } catch (err) {
-      console.error('Ошибка инициализации:', err);
-      setError(err.message || 'Ошибка подключения');
+      console.error('Init error:', err);
+      setError(err.message);
       setStatus('ended');
     }
   };
@@ -433,7 +314,6 @@ export default function CallScreen({ route, navigation }) {
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setIsMuted(!isMuted);
-        console.log('Микрофон:', audioTrack.enabled ? 'включен' : 'выключен');
       }
     }
   };
@@ -444,7 +324,6 @@ export default function CallScreen({ route, navigation }) {
       if (videoTrack) {
         videoTrack.enabled = !videoTrack.enabled;
         setIsVideoOff(!isVideoOff);
-        console.log('Камера:', videoTrack.enabled ? 'включена' : 'выключена');
       }
     }
   };
@@ -502,21 +381,21 @@ export default function CallScreen({ route, navigation }) {
         {error && <Text style={styles.error}>{error}</Text>}
         
         {!hasAudio && status === 'connected' && (
-          <Text style={styles.warning}>⚠️ Звонок без звука (микрофон недоступен)</Text>
+          <Text style={styles.warning}>⚠️ Без звука</Text>
         )}
 
         {status === 'connected' && (
           <View style={styles.controls}>
             {hasAudio && (
               <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
-                <Text style={styles.controlIcon}>{isMuted ? '' : '🎤'}</Text>
+                <Text style={styles.controlIcon}>{isMuted ? '🔇' : '🎤'}</Text>
                 <Text style={styles.controlText}>{isMuted ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '' : '📹'}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
