@@ -1,33 +1,45 @@
 // screens/CallScreen.js
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
-import * as Notifications from 'expo-notifications';
 
-// Настройка уведомлений для мобильных
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({ shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: true }),
-});
-
+// TURN-серверы OpenRelay (бесплатные)
 const TURN_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+  {
+    urls: 'stun:stun.l.google.com:19302'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  }
 ];
 
+// Импорты для разных платформ
 let RTCPeerConnection = null;
 let RTCSessionDescription = null;
 let RTCIceCandidate = null;
 let mediaDevices = null;
 
 if (Platform.OS === 'web') {
+  // Для веба используем нативный WebRTC API браузера
   RTCPeerConnection = window.RTCPeerConnection;
   RTCSessionDescription = window.RTCSessionDescription;
   RTCIceCandidate = window.RTCIceCandidate;
   mediaDevices = navigator.mediaDevices;
 } else {
+  // Для мобильных устройств
   const WebRTC = require('react-native-webrtc');
   RTCPeerConnection = WebRTC.RTCPeerConnection;
   RTCSessionDescription = WebRTC.RTCSessionDescription;
@@ -36,7 +48,7 @@ if (Platform.OS === 'web') {
 }
 
 export default function CallScreen({ route, navigation }) {
-  const { chatId, title, isVideoCall, callerId, targetUserId } = route.params || {};
+  const { chatId, title, isVideoCall } = route.params || {};
   const { colors } = useTheme();
   
   const [status, setStatus] = useState('connecting');
@@ -47,68 +59,32 @@ export default function CallScreen({ route, navigation }) {
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const remoteAudioRef = useRef(null); // НОВОЕ: для звука
+  const remoteAudioRef = useRef(null); // Для аудио
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
   const channelRef = useRef(null);
   const timerRef = useRef(null);
 
+  // Буфер для ICE-кандидатов
   const pendingIceRef = useRef([]);
   const remoteDescSetRef = useRef(false);
 
   useEffect(() => {
-    requestNotificationPermission();
     initCall();
     return () => {
       endCall();
     };
   }, []);
 
-  // Запрос разрешений на уведомления
-  const requestNotificationPermission = async () => {
-    if (Platform.OS === 'web') {
-      if ('Notification' in window && Notification.permission !== 'granted') {
-        await Notification.requestPermission();
-      }
-    } else {
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Внимание', 'Разрешите уведомления, чтобы видеть входящие звонки');
-      }
-    }
-  };
-
-  // Показ уведомления о входящем звонке
-  const showCallNotification = (senderName) => {
-    if (Platform.OS === 'web') {
-      if (Notification.permission === 'granted') {
-        const notification = new Notification('📞 Входящий звонок', {
-          body: `${senderName || 'Пользователь'} звонит вам`,
-          icon: '/favicon.ico',
-          tag: 'incoming-call'
-        });
-        notification.onclick = () => {
-          window.focus();
-          notification.close();
-        };
-      }
-    } else {
-      Notifications.scheduleNotificationAsync({
-        content: {
-          title: '📞 Входящий звонок',
-          body: `${senderName || 'Пользователь'} звонит вам`,
-          sound: 'default',
-          priority: Notifications.AndroidNotificationPriority.HIGH,
-        },
-        trigger: null,
-      });
-    }
-  };
-
   const applyPendingIce = async () => {
     if (pendingIceRef.current.length > 0 && pcRef.current) {
+      console.log(`Применяем ${pendingIceRef.current.length} ICE-кандидатов`);
       for (const candidate of pendingIceRef.current) {
-        try { await pcRef.current.addIceCandidate(candidate); } catch (e) { console.error('ICE error:', e); }
+        try {
+          await pcRef.current.addIceCandidate(candidate);
+        } catch (e) {
+          console.error('Ошибка ICE:', e);
+        }
       }
       pendingIceRef.current = [];
     }
@@ -119,86 +95,147 @@ export default function CallScreen({ route, navigation }) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Не авторизован');
 
-      const stream = await mediaDevices.getUserMedia({ audio: true, video: isVideoCall });
+      // Получаем доступ к микрофону/камере
+      const stream = await mediaDevices.getUserMedia({ 
+        audio: true, 
+        video: isVideoCall 
+      });
       localStreamRef.current = stream;
 
+      // Для веба: показываем локальное видео
       if (Platform.OS === 'web' && localVideoRef.current && isVideoCall) {
         localVideoRef.current.srcObject = stream;
       }
 
-      const pc = new RTCPeerConnection({ iceServers: TURN_SERVERS });
+      // Создаем RTCPeerConnection
+      const pc = new RTCPeerConnection({
+        iceServers: TURN_SERVERS
+      });
       pcRef.current = pc;
 
+      // Добавляем треки
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
+      // Обработка ICE-кандидатов
       pc.onicecandidate = (event) => {
         if (event.candidate && channelRef.current) {
           channelRef.current.send({
-            type: 'broadcast', event: 'ice-candidate',
-            payload: { candidate: event.candidate.candidate, sdpMid: event.candidate.sdpMid, sdpMLineIndex: event.candidate.sdpMLineIndex, target: targetUserId }
+            type: 'broadcast',
+            event: 'ice-candidate',
+            payload: {
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+              target: route.params?.targetUserId
+            }
           });
         }
       };
 
-      // НОВОЕ: Обработка удалённого потока + включение звука
+      // Обработка удаленного трека
       pc.ontrack = (event) => {
-        const remoteStream = event.streams[0];
-        console.log('Получен удалённый поток');
+        console.log('Получен удаленный трек:', event.track.kind);
         
         if (Platform.OS === 'web') {
-          if (isVideoCall && remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = remoteStream;
-          } else if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = remoteStream;
-            remoteAudioRef.current.play().catch(e => console.log('Audio play blocked:', e));
+          if (event.track.kind === 'video' && remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = event.streams[0];
+            // Явно вызываем play() для видео (включает и аудио)
+            remoteVideoRef.current.play().catch(err => {
+              console.error('Ошибка воспроизведения видео:', err);
+            });
+          }
+          
+          // Отдельный аудио элемент для гарантии воспроизведения
+          if (event.track.kind === 'audio' && remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = event.streams[0];
+            remoteAudioRef.current.play().catch(err => {
+              console.error('Ошибка воспроизведения аудио:', err);
+            });
           }
         }
+        
         setStatus('connected');
         startTimer();
       };
 
+      // Обработка состояния соединения
       pc.onconnectionstatechange = () => {
+        console.log('Состояние соединения:', pc.connectionState);
         if (pc.connectionState === 'failed') {
-          setError('Соединение разорвано. Проверьте интернет.');
+          setError('Соединение не удалось. Проверьте интернет.');
           setStatus('ended');
         }
       };
 
-      const channel = supabase.channel(`call:${chatId}`, { config: { broadcast: { self: true } } });
+      // Подключаемся к каналу сигнализации
+      const channel = supabase.channel(`call:${chatId}`, {
+        config: { broadcast: { self: true } }
+      });
 
+      // Обработка Offer
       channel.on('broadcast', { event: 'offer' }, async ({ payload: sdPayload }) => {
         if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
-          showCallNotification('Собеседник'); // Уведомление при входящем
+          console.log('Получен offer');
           try {
-            await pc.setRemoteDescription(new RTCSessionDescription({ type: sdPayload.type, sdp: sdPayload.sdp }));
+            await pc.setRemoteDescription(new RTCSessionDescription({
+              type: sdPayload.type,
+              sdp: sdPayload.sdp
+            }));
             remoteDescSetRef.current = true;
             await applyPendingIce();
+
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
+            
             channel.send({
-              type: 'broadcast', event: 'answer',
-              payload: { sdp: pc.localDescription.sdp, type: pc.localDescription.type, target: sdPayload.sender_id }
+              type: 'broadcast',
+              event: 'answer',
+              payload: {
+                sdp: pc.localDescription.sdp,
+                type: pc.localDescription.type,
+                target: sdPayload.sender_id
+              }
             });
-          } catch (err) { console.error('Offer error:', err); }
+          } catch (err) {
+            console.error('Ошибка обработки offer:', err);
+          }
         }
       });
 
+      // Обработка Answer
       channel.on('broadcast', { event: 'answer' }, async ({ payload: sdPayload }) => {
         if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
+          console.log('Получен answer');
           try {
-            await pc.setRemoteDescription(new RTCSessionDescription({ type: sdPayload.type, sdp: sdPayload.sdp }));
+            await pc.setRemoteDescription(new RTCSessionDescription({
+              type: sdPayload.type,
+              sdp: sdPayload.sdp
+            }));
             remoteDescSetRef.current = true;
             await applyPendingIce();
-          } catch (err) { console.error('Answer error:', err); }
+          } catch (err) {
+            console.error('Ошибка обработки answer:', err);
+          }
         }
       });
 
+      // Обработка ICE-кандидатов
       channel.on('broadcast', { event: 'ice-candidate' }, async ({ payload: icePayload }) => {
         if (icePayload.sender_id !== user.id && icePayload.candidate) {
-          const candidate = new RTCIceCandidate({ candidate: icePayload.candidate, sdpMid: icePayload.sdpMid, sdpMLineIndex: icePayload.sdpMLineIndex });
+          const candidate = new RTCIceCandidate({
+            candidate: icePayload.candidate,
+            sdpMid: icePayload.sdpMid,
+            sdpMLineIndex: icePayload.sdpMLineIndex
+          });
+
           if (remoteDescSetRef.current) {
-            try { await pc.addIceCandidate(candidate); } catch (e) { console.error('ICE:', e); }
+            try {
+              await pc.addIceCandidate(candidate);
+            } catch (e) {
+              console.error('Ошибка ICE:', e);
+            }
           } else {
+            console.log('Буферизуем ICE-кандидат');
             pendingIceRef.current.push(candidate);
           }
         }
@@ -212,19 +249,27 @@ export default function CallScreen({ route, navigation }) {
       channel.subscribe();
       channelRef.current = channel;
 
-      if (callerId === user.id) {
+      // Если мы инициатор - создаем Offer
+      if (route.params?.callerId === user.id) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
+        
         channel.send({
-          type: 'broadcast', event: 'offer',
-          payload: { sdp: pc.localDescription.sdp, type: pc.localDescription.type, target: targetUserId }
+          type: 'broadcast',
+          event: 'offer',
+          payload: {
+            sdp: pc.localDescription.sdp,
+            type: pc.localDescription.type,
+            target: route.params?.targetUserId
+          }
         });
         setStatus('ringing');
       } else {
         setStatus('ringing');
       }
+
     } catch (err) {
-      console.error('Init error:', err);
+      console.error('Ошибка инициализации:', err);
       setError(err.message || 'Ошибка подключения');
       setStatus('ended');
     }
@@ -244,14 +289,20 @@ export default function CallScreen({ route, navigation }) {
   const toggleMute = () => {
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
-      if (audioTrack) { audioTrack.enabled = !audioTrack.enabled; setIsMuted(!isMuted); }
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsMuted(!isMuted);
+      }
     }
   };
 
   const toggleVideo = () => {
     if (localStreamRef.current) {
       const videoTrack = localStreamRef.current.getVideoTracks()[0];
-      if (videoTrack) { videoTrack.enabled = !videoTrack.enabled; setIsVideoOff(!isVideoOff); }
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsVideoOff(!isVideoOff);
+      }
     }
   };
 
@@ -260,34 +311,52 @@ export default function CallScreen({ route, navigation }) {
       channelRef.current.send({ type: 'broadcast', event: 'hangup', payload: {} });
       supabase.removeChannel(channelRef.current);
     }
-    if (localStreamRef.current) localStreamRef.current.getTracks().forEach(track => track.stop());
-    if (pcRef.current) pcRef.current.close();
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+    if (pcRef.current) {
+      pcRef.current.close();
+    }
     if (timerRef.current) clearInterval(timerRef.current);
     setStatus('ended');
   };
 
   return (
     <View style={[styles.container, { backgroundColor: '#1a1a1a' }]}>
-      {/* Удалённое видео */}
       {isVideoCall && status === 'connected' && (
         Platform.OS === 'web' ? (
-          <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideoWeb} />
+          <>
+            <video 
+              ref={remoteVideoRef} 
+              autoPlay 
+              playsInline 
+              style={styles.remoteVideoWeb} 
+            />
+            {/* Скрытый аудио элемент для гарантии воспроизведения */}
+            <audio 
+              ref={remoteAudioRef} 
+              autoPlay 
+              style={{ display: 'none' }} 
+            />
+          </>
         ) : (
           <View style={styles.remoteVideoMobile} />
         )
       )}
 
-      {/* Локальное видео */}
       {isVideoCall && (
         Platform.OS === 'web' ? (
-          <video ref={localVideoRef} autoPlay playsInline muted style={styles.localVideoWeb} />
+          <video 
+            ref={localVideoRef} 
+            autoPlay 
+            playsInline 
+            muted 
+            style={styles.localVideoWeb} 
+          />
         ) : (
           <View style={styles.localVideoMobile} />
         )
       )}
-
-      {/* НОВОЕ: Скрытый аудио элемент для звука */}
-      {Platform.OS === 'web' && <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />}
 
       <View style={styles.overlay}>
         <View style={styles.header}>
@@ -304,19 +373,28 @@ export default function CallScreen({ route, navigation }) {
 
         {status === 'connected' && (
           <View style={styles.controls}>
-            <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
-              <Text style={styles.controlIcon}>{isMuted ? '🔇' : ''}</Text>
+            <TouchableOpacity 
+              style={[styles.controlBtn, isMuted && styles.controlBtnActive]} 
+              onPress={toggleMute}
+            >
+              <Text style={styles.controlIcon}>{isMuted ? '🔇' : '🎤'}</Text>
               <Text style={styles.controlText}>{isMuted ? 'Вкл' : 'Выкл'}</Text>
             </TouchableOpacity>
             
             {isVideoCall && (
-              <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
+              <TouchableOpacity 
+                style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} 
+                onPress={toggleVideo}
+              >
                 <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
 
-            <TouchableOpacity style={[styles.controlBtn, styles.hangupBtn]} onPress={endCall}>
+            <TouchableOpacity 
+              style={[styles.controlBtn, styles.hangupBtn]} 
+              onPress={endCall}
+            >
               <Text style={styles.controlIcon}>📞</Text>
               <Text style={styles.controlText}>Завершить</Text>
             </TouchableOpacity>
@@ -324,7 +402,10 @@ export default function CallScreen({ route, navigation }) {
         )}
 
         {status === 'ended' && (
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <TouchableOpacity 
+            style={styles.backBtn} 
+            onPress={() => navigation.goBack()}
+          >
             <Text style={styles.backBtnText}>Вернуться в чат</Text>
           </TouchableOpacity>
         )}
@@ -334,22 +415,120 @@ export default function CallScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, position: 'relative' },
-  remoteVideoWeb: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: '#000' },
-  localVideoWeb: { position: 'absolute', top: 60, right: 20, width: 120, height: 160, borderRadius: 12, backgroundColor: '#333', borderWidth: 2, borderColor: '#fff', zIndex: 10 },
-  remoteVideoMobile: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: '#000' },
-  localVideoMobile: { position: 'absolute', top: 60, right: 20, width: 120, height: 160, borderRadius: 12, backgroundColor: '#333', borderWidth: 2, borderColor: '#fff', zIndex: 10 },
-  overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'space-between', padding: 20, paddingTop: 60, backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 5 },
-  header: { alignItems: 'center' },
-  title: { color: '#fff', fontSize: 28, fontWeight: 'bold', marginBottom: 10 },
-  status: { color: 'rgba(255,255,255,0.8)', fontSize: 16 },
-  error: { color: '#FF3B30', textAlign: 'center', marginTop: 20, fontSize: 14, paddingHorizontal: 20 },
-  controls: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', paddingBottom: 40 },
-  controlBtn: { alignItems: 'center', width: 80 },
-  controlBtnActive: { opacity: 0.5 },
-  controlIcon: { fontSize: 28, marginBottom: 5 },
-  controlText: { color: '#fff', fontSize: 12 },
-  hangupBtn: { backgroundColor: '#FF3B30', width: 70, height: 70, borderRadius: 35, justifyContent: 'center', alignItems: 'center' },
-  backBtn: { alignSelf: 'center', padding: 15, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 25 },
-  backBtnText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  container: { 
+    flex: 1, 
+    position: 'relative' 
+  },
+  remoteVideoWeb: { 
+    position: 'absolute', 
+    top: 0, 
+    left: 0, 
+    width: '100%', 
+    height: '100%', 
+    backgroundColor: '#000' 
+  },
+  localVideoWeb: { 
+    position: 'absolute', 
+    top: 60, 
+    right: 20, 
+    width: 120, 
+    height: 160, 
+    borderRadius: 12, 
+    backgroundColor: '#333', 
+    borderWidth: 2, 
+    borderColor: '#fff', 
+    zIndex: 10 
+  },
+  remoteVideoMobile: { 
+    position: 'absolute', 
+    top: 0, 
+    left: 0, 
+    width: '100%', 
+    height: '100%', 
+    backgroundColor: '#000' 
+  },
+  localVideoMobile: { 
+    position: 'absolute', 
+    top: 60, 
+    right: 20, 
+    width: 120, 
+    height: 160, 
+    borderRadius: 12, 
+    backgroundColor: '#333', 
+    borderWidth: 2, 
+    borderColor: '#fff', 
+    zIndex: 10 
+  },
+  overlay: { 
+    position: 'absolute', 
+    top: 0, 
+    left: 0, 
+    right: 0, 
+    bottom: 0, 
+    justifyContent: 'space-between', 
+    padding: 20, 
+    paddingTop: 60, 
+    backgroundColor: 'rgba(0,0,0,0.4)', 
+    zIndex: 5 
+  },
+  header: { 
+    alignItems: 'center' 
+  },
+  title: { 
+    color: '#fff', 
+    fontSize: 28, 
+    fontWeight: 'bold', 
+    marginBottom: 10 
+  },
+  status: { 
+    color: 'rgba(255,255,255,0.8)', 
+    fontSize: 16 
+  },
+  error: { 
+    color: '#FF3B30', 
+    textAlign: 'center', 
+    marginTop: 20, 
+    fontSize: 14, 
+    paddingHorizontal: 20 
+  },
+  controls: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-around', 
+    alignItems: 'center', 
+    paddingBottom: 40 
+  },
+  controlBtn: { 
+    alignItems: 'center', 
+    width: 80 
+  },
+  controlBtnActive: { 
+    opacity: 0.5 
+  },
+  controlIcon: { 
+    fontSize: 28, 
+    marginBottom: 5 
+  },
+  controlText: { 
+    color: '#fff', 
+    fontSize: 12 
+  },
+  hangupBtn: { 
+    backgroundColor: '#FF3B30', 
+    width: 70, 
+    height: 70, 
+    borderRadius: 35, 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  backBtn: { 
+    alignSelf: 'center', 
+    padding: 15, 
+    backgroundColor: 'rgba(255,255,255,0.2)', 
+    borderRadius: 25 
+  },
+  backBtnText: { 
+    color: '#fff', 
+    fontSize: 16, 
+    fontWeight: 'bold' 
+  }
 });
