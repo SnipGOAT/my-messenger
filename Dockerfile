@@ -3,10 +3,6 @@
 # ============================================
 FROM node:20-alpine AS builder
 
-# Объявляем build arguments (передаются из Amvera)
-ARG EXPO_PUBLIC_SUPABASE_URL
-ARG EXPO_PUBLIC_SUPABASE_ANON_KEY
-
 WORKDIR /app
 
 # Копируем файлы зависимостей
@@ -15,16 +11,10 @@ COPY package*.json ./
 # Устанавливаем зависимости
 RUN npm ci
 
-# Копируем весь код
+# Копируем весь код (включая .env.production)
 COPY . .
 
-# Создаём файл .env с переменными для Expo
-RUN echo "EXPO_PUBLIC_SUPABASE_URL=${EXPO_PUBLIC_SUPABASE_URL}" > .env && \
-    echo "EXPO_PUBLIC_SUPABASE_ANON_KEY=${EXPO_PUBLIC_SUPABASE_ANON_KEY}" >> .env && \
-    echo "✅ Created .env file with:" && \
-    cat .env
-
-# Собираем веб-версию (Expo прочитает .env)
+# Собираем веб-версию (Expo автоматически прочитает .env.production)
 RUN npx expo export -p web
 
 # ============================================
