@@ -3,7 +3,27 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
-import Peer from 'peerjs';
+
+// TURN-серверы (OpenRelay + fallback)
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  }
+];
 
 export default function CallScreen({ route, navigation }) {
   const { chatId, title, isVideoCall } = route.params || {};
@@ -14,108 +34,47 @@ export default function CallScreen({ route, navigation }) {
   const [isVideoOff, setIsVideoOff] = useState(!isVideoCall);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState(null);
-  const [peerId, setPeerId] = useState('');
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
-  const peerRef = useRef(null);
-  const callRef = useRef(null);
+  const pcRef = useRef(null);
   const localStreamRef = useRef(null);
+  const channelRef = useRef(null);
   const timerRef = useRef(null);
+  const pendingIceRef = useRef([]);
+  const remoteDescSetRef = useRef(false);
 
   useEffect(() => {
-    initPeer();
+    initCall();
     return () => {
       endCall();
     };
   }, []);
 
-  const initPeer = async () => {
+  const applyPendingIce = async () => {
+    if (pendingIceRef.current.length > 0 && pcRef.current) {
+      console.log(`Применяем ${pendingIceRef.current.length} ICE-кандидатов`);
+      for (const candidate of pendingIceRef.current) {
+        try {
+          await pcRef.current.addIceCandidate(candidate);
+        } catch (e) {
+          console.error('Ошибка ICE:', e);
+        }
+      }
+      pendingIceRef.current = [];
+    }
+  };
+
+  const initCall = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Не авторизован');
 
-      // Создаём Peer с уникальным ID (user.id)
-      // ИСПОЛЬЗУЕМ ПУБЛИЧНЫЙ PEERJS CLOUD SERVER
-      const peer = new Peer(user.id, {
-        debug: 2,
-        // Не указываем host/port — используем облачный сервер PeerJS по умолчанию
-      });
-
-      peerRef.current = peer;
-
-      peer.on('open', (id) => {
-        console.log('Peer ID:', id);
-        setPeerId(id);
-        setStatus('ringing');
-      });
-
-      peer.on('call', async (call) => {
-        console.log('Входящий звонок');
-        
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: isVideoCall
-        });
-        localStreamRef.current = stream;
-
-        if (Platform.OS === 'web' && localVideoRef.current && isVideoCall) {
-          localVideoRef.current.srcObject = stream;
-        }
-
-        call.answer(stream);
-        handleCall(call);
-      });
-
-      peer.on('error', (err) => {
-        console.error('Peer error:', err);
-        setError('Ошибка соединения: ' + err.type);
-        setStatus('ended');
-      });
-
-    } catch (err) {
-      console.error('Ошибка инициализации:', err);
-      setError(err.message);
-      setStatus('ended');
-    }
-  };
-
-  const handleCall = (call) => {
-    callRef.current = call;
-
-    call.on('stream', (remoteStream) => {
-      console.log('Получен удаленный поток');
-      if (Platform.OS === 'web' && remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-        remoteVideoRef.current.play().catch(err => {
-          console.error('Ошибка воспроизведения:', err);
-        });
-      }
-      
-      // Отдельно для аудио
-      if (Platform.OS === 'web' && remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.play().catch(err => {
-          console.error('Ошибка воспроизведения аудио:', err);
-        });
-      }
-      
-      setStatus('connected');
-      startTimer();
-    });
-
-    call.on('close', () => {
-      setStatus('ended');
-      setTimeout(() => navigation.goBack(), 2000);
-    });
-  };
-
-  const startCall = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: isVideoCall
+      // Получаем доступ к микрофону/камере
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { echoCancellation: true, noiseSuppression: true },
+        video: isVideoCall ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false
       });
       localStreamRef.current = stream;
 
@@ -123,12 +82,172 @@ export default function CallScreen({ route, navigation }) {
         localVideoRef.current.srcObject = stream;
       }
 
-      const targetUserId = route.params?.targetUserId;
-      const call = peerRef.current.call(targetUserId, stream);
-      handleCall(call);
+      // Создаем RTCPeerConnection
+      const pc = new RTCPeerConnection({
+        iceServers: ICE_SERVERS,
+        iceCandidatePoolSize: 10
+      });
+      pcRef.current = pc;
+
+      // Добавляем треки
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      // Обработка ICE-кандидатов
+      pc.onicecandidate = (event) => {
+        if (event.candidate && channelRef.current) {
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'ice-candidate',
+            payload: {
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+              target: route.params?.targetUserId
+            }
+          });
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        console.log('ICE состояние:', pc.iceConnectionState);
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+          setError('Потеряно соединение');
+          setStatus('ended');
+        }
+      };
+
+      // Обработка удаленного трека
+      pc.ontrack = (event) => {
+        console.log('Получен удаленный трек:', event.track.kind);
+        
+        if (Platform.OS === 'web') {
+          if (event.track.kind === 'video' && remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = event.streams[0];
+            remoteVideoRef.current.play().catch(err => {
+              console.error('Ошибка видео:', err);
+            });
+          }
+          
+          if (event.track.kind === 'audio' && remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = event.streams[0];
+            remoteAudioRef.current.play().catch(err => {
+              console.error('Ошибка аудио:', err);
+            });
+          }
+        }
+        
+        setStatus('connected');
+        startTimer();
+      };
+
+      // Подключаемся к каналу сигнализации
+      const channel = supabase.channel(`call:${chatId}`, {
+        config: { broadcast: { self: true } }
+      });
+
+      // Обработка Offer
+      channel.on('broadcast', { event: 'offer' }, async ({ payload: sdPayload }) => {
+        if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
+          console.log('Получен offer');
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription({
+              type: sdPayload.type,
+              sdp: sdPayload.sdp
+            }));
+            remoteDescSetRef.current = true;
+            await applyPendingIce();
+
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            
+            channel.send({
+              type: 'broadcast',
+              event: 'answer',
+              payload: {
+                sdp: pc.localDescription.sdp,
+                type: pc.localDescription.type,
+                target: sdPayload.sender_id
+              }
+            });
+          } catch (err) {
+            console.error('Ошибка offer:', err);
+            setError('Ошибка при обработке звонка');
+          }
+        }
+      });
+
+      // Обработка Answer
+      channel.on('broadcast', { event: 'answer' }, async ({ payload: sdPayload }) => {
+        if (sdPayload.sender_id !== user.id && !remoteDescSetRef.current) {
+          console.log('Получен answer');
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription({
+              type: sdPayload.type,
+              sdp: sdPayload.sdp
+            }));
+            remoteDescSetRef.current = true;
+            await applyPendingIce();
+          } catch (err) {
+            console.error('Ошибка answer:', err);
+          }
+        }
+      });
+
+      // Обработка ICE-кандидатов
+      channel.on('broadcast', { event: 'ice-candidate' }, async ({ payload: icePayload }) => {
+        if (icePayload.sender_id !== user.id && icePayload.candidate) {
+          const candidate = new RTCIceCandidate({
+            candidate: icePayload.candidate,
+            sdpMid: icePayload.sdpMid,
+            sdpMLineIndex: icePayload.sdpMLineIndex
+          });
+
+          if (remoteDescSetRef.current) {
+            try {
+              await pc.addIceCandidate(candidate);
+            } catch (e) {
+              console.error('Ошибка ICE:', e);
+            }
+          } else {
+            console.log('Буферизуем ICE');
+            pendingIceRef.current.push(candidate);
+          }
+        }
+      });
+
+      channel.on('broadcast', { event: 'hangup' }, () => {
+        console.log('Получен hangup');
+        setStatus('ended');
+        setTimeout(() => navigation.goBack(), 2000);
+      });
+
+      channel.subscribe();
+      channelRef.current = channel;
+
+      // Если мы инициатор - создаем Offer
+      if (route.params?.callerId === user.id) {
+        console.log('Создаем offer');
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        channel.send({
+          type: 'broadcast',
+          event: 'offer',
+          payload: {
+            sdp: pc.localDescription.sdp,
+            type: pc.localDescription.type,
+            target: route.params?.targetUserId
+          }
+        });
+        setStatus('ringing');
+      } else {
+        console.log('Ждем offer');
+        setStatus('ringing');
+      }
+
     } catch (err) {
-      console.error('Ошибка звонка:', err);
-      setError('Не удалось получить доступ к микрофону/камере');
+      console.error('Ошибка инициализации:', err);
+      setError(err.message || 'Ошибка подключения');
       setStatus('ended');
     }
   };
@@ -165,25 +284,19 @@ export default function CallScreen({ route, navigation }) {
   };
 
   const endCall = () => {
-    if (callRef.current) {
-      callRef.current.close();
-    }
-    if (peerRef.current) {
-      peerRef.current.destroy();
+    if (channelRef.current) {
+      channelRef.current.send({ type: 'broadcast', event: 'hangup', payload: {} });
+      supabase.removeChannel(channelRef.current);
     }
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
     }
+    if (pcRef.current) {
+      pcRef.current.close();
+    }
     if (timerRef.current) clearInterval(timerRef.current);
     setStatus('ended');
   };
-
-  // Если мы инициатор звонка
-  useEffect(() => {
-    if (status === 'ringing' && route.params?.callerId) {
-      startCall();
-    }
-  }, [status]);
 
   return (
     <View style={[styles.container, { backgroundColor: '#1a1a1a' }]}>
