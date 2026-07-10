@@ -35,13 +35,6 @@ export default function ChatMediaScreen({ route, navigation }) {
   const [activeTab, setActiveTab] = useState('photos'); // 'photos', 'files', 'audios'
 
   useEffect(() => {
-    // Устанавливаем заголовок для веба
-    if (typeof document !== 'undefined') {
-      document.title = 'MAX 2.0';
-    }
-  }, []);
-
-  useEffect(() => {
     loadMedia();
 
     // Realtime подписка на новые медиа

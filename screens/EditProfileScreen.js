@@ -17,13 +17,6 @@ export default function EditProfileScreen({ route, navigation }) {
   const [usernameAvailable, setUsernameAvailable] = useState(true);
 
   useEffect(() => {
-    // Устанавливаем заголовок для веба
-    if (typeof document !== 'undefined') {
-      document.title = 'MAX 2.0';
-    }
-  }, []);
-
-  useEffect(() => {
     loadProfile();
   }, [userId]);
 

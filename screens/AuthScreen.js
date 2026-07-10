@@ -12,13 +12,6 @@ export default function AuthScreen() {
   const [loading, setLoading] = useState(false);
   const { colors } = useTheme();
 
-  useEffect(() => {
-    // Устанавливаем заголовок для веба
-    if (typeof document !== 'undefined') {
-      document.title = 'MAX 2.0';
-    }
-  }, []);
-
   const handleAuth = async () => {
     if (!email || !password) {
       return Alert.alert('Ошибка', 'Введите email и пароль');

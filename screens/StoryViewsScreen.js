@@ -24,13 +24,6 @@ export default function StoryViewsScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Устанавливаем заголовок для веба
-    if (typeof document !== 'undefined') {
-      document.title = 'MAX 2.0';
-    }
-  }, []);
-
-  useEffect(() => {
     loadViews();
   }, [storyId]);
 

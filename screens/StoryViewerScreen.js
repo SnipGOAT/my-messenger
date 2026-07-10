@@ -26,13 +26,6 @@ export default function StoryViewerScreen({ route, navigation }) {
   const currentStory = stories[currentIndex];
 
   useEffect(() => {
-    // Устанавливаем заголовок для веба
-    if (typeof document !== 'undefined') {
-      document.title = 'MAX 2.0';
-    }
-  }, []);
-
-  useEffect(() => {
     if (currentStory) {
       markAsViewed(currentStory.id);
     }

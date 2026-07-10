@@ -11,13 +11,6 @@ export default function CreateGroupScreen({ navigation }) {
   const [searchResults, setSearchResults] = useState([]);
   const [selectedUsers, setSelectedUsers] = useState([]);
 
-  useEffect(() => {
-    // Устанавливаем заголовок для веба
-    if (typeof document !== 'undefined') {
-      document.title = 'MAX 2.0';
-    }
-  }, []);
-
   const searchUsers = async (query) => {
     setSearchQuery(query);
     if (query.trim().length < 2) {

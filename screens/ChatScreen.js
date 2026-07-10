@@ -14,13 +14,6 @@ import * as DocumentPicker from 'expo-document-picker';
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👎'];
 
-  useEffect(() => {
-    // Устанавливаем заголовок для веба
-    if (typeof document !== 'undefined') {
-      document.title = 'MAX 2.0';
-    }
-  }, []);
-
 const FILE_ICONS = {
   pdf: '📄', doc: '📝', docx: '📝', xls: '📊', xlsx: '📊',
   ppt: '📽️', pptx: '📽️', zip: '🗜️', rar: '🗜️', '7z': '🗜️',

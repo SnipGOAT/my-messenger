@@ -28,13 +28,6 @@ export default function ChatInfoScreen({ route, navigation }) {
   const [addingUserId, setAddingUserId] = useState(null);
 
   useEffect(() => {
-    // Устанавливаем заголовок для веба
-    if (typeof document !== 'undefined') {
-      document.title = 'MAX 2.0';
-    }
-  }, []);
-
-  useEffect(() => {
     loadChatInfo();
   }, [chatId]);
 
