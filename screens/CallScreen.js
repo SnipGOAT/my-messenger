@@ -1,14 +1,11 @@
 // screens/CallScreen.js
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform, Alert } from 'react-native';
+import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
 
-// === НАСТРОЙКИ AGORA (ВСТАВЬ СВОИ ДАННЫЕ!) ===
-const APP_ID = 'f3912d4cb8b147428bd8448eefe89d36'; 
-const TEMP_TOKEN = '007eJxTYAj4ViR/q7GiLjqnblbKs/nmsze8qqiVfmR6ZIVmyxX30F0KDGnGloZGKSbJSRZJhibmJkYWSSkWJiYWqalpqRaWKcZmLY8DshoCGRlir3MxMzJAIIjPxuDrGGGkZ8DAAADtUSBk'; // Токен из консоли Agora (действует 24ч)
-// ==============================================
+const APP_ID = 'f3912d4cb8b147428bd8448eefe89d36'; // Оставь App ID здесь (он публичный)
 
-// Импорты для разных платформ
 let AgoraRTC = null;
 let RtcEngine = null;
 let RtcLocalView = null;
@@ -33,16 +30,12 @@ export default function CallScreen({ route, navigation }) {
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState(null);
 
-  // Рефы для Web SDK
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const clientRef = useRef(null);
   const localTrackRef = useRef(null);
-
-  // Рефы для Mobile SDK
   const engineRef = useRef(null);
   const [remoteUid, setRemoteUid] = useState(null);
-
   const timerRef = useRef(null);
 
   useEffect(() => {
@@ -56,9 +49,26 @@ export default function CallScreen({ route, navigation }) {
     };
   }, []);
 
-  // ================= WEB LOGIC =================
+  // === НОВОЕ: Получаем токен из Supabase Edge Function ===
+  const fetchAgoraToken = async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-agora-token', {
+        body: { chatId, isVideoCall }
+      });
+
+      if (error) throw error;
+      return data; // { token, uid, appId }
+    } catch (err) {
+      console.error('Ошибка получения токена:', err);
+      throw new Error('Не удалось получить токен для звонка');
+    }
+  };
+
   const initWebCall = async () => {
     try {
+      // Получаем токен
+      const { token, uid } = await fetchAgoraToken();
+
       const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
       clientRef.current = client;
 
@@ -90,20 +100,22 @@ export default function CallScreen({ route, navigation }) {
       }
 
       const channelName = `chat_${chatId}`;
-      await client.join(APP_ID, channelName, TEMP_TOKEN || null, null);
+      // Используем полученный токен
+      await client.join(APP_ID, channelName, token, uid);
       await client.publish([microphoneTrack, cameraTrack]);
 
       setStatus('ringing');
     } catch (err) {
       console.error('Web Call Error:', err);
-      setError('Ошибка подключения. Проверьте App ID и Токен.');
+      setError(err.message || 'Ошибка подключения');
       setStatus('ended');
     }
   };
 
-  // ================= MOBILE LOGIC =================
   const initMobileCall = async () => {
     try {
+      const { token, uid } = await fetchAgoraToken();
+
       const engine = RtcEngine();
       engineRef.current = engine;
 
@@ -127,17 +139,17 @@ export default function CallScreen({ route, navigation }) {
       });
 
       const channelName = `chat_${chatId}`;
-      engine.joinChannel(TEMP_TOKEN || '', channelName, null, 0);
+      // Используем полученный токен
+      engine.joinChannel(token, channelName, null, uid);
 
       setStatus('ringing');
     } catch (err) {
       console.error('Mobile Call Error:', err);
-      setError('Ошибка инициализации движка.');
+      setError(err.message || 'Ошибка инициализации');
       setStatus('ended');
     }
   };
 
-  // ================= COMMON LOGIC =================
   const startTimer = () => {
     if (timerRef.current) return;
     timerRef.current = setInterval(() => setDuration(prev => prev + 1), 1000);
@@ -198,7 +210,6 @@ export default function CallScreen({ route, navigation }) {
 
   return (
     <View style={[styles.container, { backgroundColor: '#1a1a1a' }]}>
-      {/* Видео собеседника */}
       {isVideoCall && status === 'connected' && (
         Platform.OS === 'web' ? (
           <div ref={remoteVideoRef} style={styles.remoteVideoWeb} />
@@ -211,7 +222,6 @@ export default function CallScreen({ route, navigation }) {
         )
       )}
 
-      {/* Локальное видео (картинка в картинке) */}
       {isVideoCall && (
         Platform.OS === 'web' ? (
           <div ref={localVideoRef} style={styles.localVideoWeb} />
@@ -223,7 +233,6 @@ export default function CallScreen({ route, navigation }) {
         )
       )}
 
-      {/* Оверлей */}
       <View style={styles.overlay}>
         <View style={styles.header}>
           <Text style={styles.title}>{title || 'Вызов'}</Text>
@@ -240,13 +249,13 @@ export default function CallScreen({ route, navigation }) {
         {status === 'connected' && (
           <View style={styles.controls}>
             <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
-              <Text style={styles.controlIcon}>{isMuted ? '🔇' : '🎤'}</Text>
+              <Text style={styles.controlIcon}>{isMuted ? '🔇' : ''}</Text>
               <Text style={styles.controlText}>{isMuted ? 'Вкл' : 'Выкл'}</Text>
             </TouchableOpacity>
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : ''}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
@@ -270,13 +279,10 @@ export default function CallScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, position: 'relative' },
-  // Web styles (используются как object styles для div)
   remoteVideoWeb: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: '#000' },
   localVideoWeb: { position: 'absolute', top: 60, right: 20, width: 120, height: 160, borderRadius: 12, backgroundColor: '#333', borderWidth: 2, borderColor: '#fff', zIndex: 10 },
-  // Mobile styles
   remoteVideoMobile: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: '#000' },
   localVideoMobile: { position: 'absolute', top: 60, right: 20, width: 120, height: 160, borderRadius: 12, backgroundColor: '#333', borderWidth: 2, borderColor: '#fff', zIndex: 10 },
-  
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'space-between', padding: 20, paddingTop: 60, backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 5 },
   header: { alignItems: 'center' },
   title: { color: '#fff', fontSize: 28, fontWeight: 'bold', marginBottom: 10 },
