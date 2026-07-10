@@ -1,33 +1,33 @@
 // screens/CallScreen.js
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
 
-// Конфигурация STUN сервера (бесплатный от Google)
 const rtcConfig = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
 
 export default function CallScreen({ route, navigation }) {
-  const { chatId, title, isVideoCall, callerId, callerName } = route.params || {};
+  const { chatId, title, isVideoCall, callerId } = route.params || {};
   const { colors } = useTheme();
   
-  const [status, setStatus] = useState('connecting'); // connecting, ringing, connected, ended
+  const [status, setStatus] = useState('connecting');
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(!isVideoCall);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState(null);
 
   const localStreamRef = useRef(null);
-  const remoteStreamRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const channelRef = useRef(null);
   const timerRef = useRef(null);
-
-  // Ссылки на видео элементы (для веба)
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+
+  // НОВОЕ: Буфер для ICE-кандидатов
+  const pendingIceCandidatesRef = useRef([]);
+  const remoteDescriptionSetRef = useRef(false);
 
   useEffect(() => {
     setupCall();
@@ -41,25 +41,21 @@ export default function CallScreen({ route, navigation }) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Не авторизован');
 
-      // 1. Получаем доступ к микрофону/камере
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: true, 
         video: isVideoCall 
       });
       localStreamRef.current = stream;
       
-      // Для веба: привязываем поток к видео элементу
       if (Platform.OS === 'web' && localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
       }
 
-      // 2. Создаем RTCPeerConnection
       const pc = new RTCPeerConnection(rtcConfig);
       peerConnectionRef.current = pc;
 
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Отправка ICE кандидатов
       pc.onicecandidate = (event) => {
         if (event.candidate && channelRef.current) {
           channelRef.current.send({
@@ -76,7 +72,6 @@ export default function CallScreen({ route, navigation }) {
       };
 
       pc.ontrack = (event) => {
-        remoteStreamRef.current = event.streams[0];
         if (Platform.OS === 'web' && remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = event.streams[0];
         }
@@ -84,56 +79,90 @@ export default function CallScreen({ route, navigation }) {
         startTimer();
       };
 
-      // 3. Подключаемся к каналу сигнализации
+      // НОВОЕ: Функция для применения буферизованных ICE-кандидатов
+      const applyPendingIceCandidates = async () => {
+        if (pendingIceCandidatesRef.current.length > 0) {
+          console.log(`Применяем ${pendingIceCandidatesRef.current.length} буферизованных ICE-кандидатов`);
+          for (const candidate of pendingIceCandidatesRef.current) {
+            try {
+              await pc.addIceCandidate(candidate);
+            } catch (e) {
+              console.error('Ошибка применения ICE-кандидата:', e);
+            }
+          }
+          pendingIceCandidatesRef.current = [];
+        }
+      };
+
       const channel = supabase.channel(`call:${chatId}`, {
         config: { broadcast: { self: true } }
       });
 
-      // Обработка Offer
-      // ВАЖНО: деструктурируем payload из Supabase, чтобы получить наши данные
       channel.on('broadcast', { event: 'offer' }, async ({ payload: sdPayload }) => {
-        if (sdPayload.sender_id !== user.id) {
-          console.log('Получен offer:', sdPayload);
-          // Теперь берем type и sdp из sdPayload (наши данные), а не из корня
-          const remoteDesc = { type: sdPayload.type, sdp: sdPayload.sdp };
-          await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
-          
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          
-          channel.send({
-            type: 'broadcast',
-            event: 'answer',
-            payload: { 
-              sdp: pc.localDescription.sdp, 
-              type: pc.localDescription.type,
-              target: sdPayload.sender_id 
-            }
-          });
+        if (sdPayload.sender_id !== user.id && !remoteDescriptionSetRef.current) {
+          console.log('Получен offer');
+          try {
+            const remoteDesc = { type: sdPayload.type, sdp: sdPayload.sdp };
+            await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
+            remoteDescriptionSetRef.current = true;
+            
+            // НОВОЕ: Применяем буферизованные ICE-кандидаты
+            await applyPendingIceCandidates();
+
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            
+            channel.send({
+              type: 'broadcast',
+              event: 'answer',
+              payload: { 
+                sdp: pc.localDescription.sdp, 
+                type: pc.localDescription.type,
+                target: sdPayload.sender_id 
+              }
+            });
+          } catch (err) {
+            console.error('Ошибка обработки offer:', err);
+          }
         }
       });
 
-      // Обработка Answer
       channel.on('broadcast', { event: 'answer' }, async ({ payload: sdPayload }) => {
-        if (sdPayload.sender_id !== user.id) {
-          console.log('Получен answer:', sdPayload);
-          const remoteDesc = { type: sdPayload.type, sdp: sdPayload.sdp };
-          await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
+        if (sdPayload.sender_id !== user.id && !remoteDescriptionSetRef.current) {
+          console.log('Получен answer');
+          try {
+            const remoteDesc = { type: sdPayload.type, sdp: sdPayload.sdp };
+            await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
+            remoteDescriptionSetRef.current = true;
+            
+            // НОВОЕ: Применяем буферизованные ICE-кандидаты
+            await applyPendingIceCandidates();
+          } catch (err) {
+            console.error('Ошибка обработки answer:', err);
+          }
         }
       });
 
-      // Обработка ICE кандидатов
+      // НОВОЕ: Буферизация ICE-кандидатов
       channel.on('broadcast', { event: 'ice-candidate' }, async ({ payload: icePayload }) => {
         if (icePayload.sender_id !== user.id && icePayload.candidate) {
-          try {
-            const candidate = new RTCIceCandidate({
-              candidate: icePayload.candidate,
-              sdpMid: icePayload.sdpMid,
-              sdpMLineIndex: icePayload.sdpMLineIndex
-            });
-            await pc.addIceCandidate(candidate);
-          } catch (e) {
-            console.error('Ошибка ICE кандидата:', e);
+          const candidate = new RTCIceCandidate({
+            candidate: icePayload.candidate,
+            sdpMid: icePayload.sdpMid,
+            sdpMLineIndex: icePayload.sdpMLineIndex
+          });
+
+          if (remoteDescriptionSetRef.current) {
+            // Remote description уже установлен — применяем сразу
+            try {
+              await pc.addIceCandidate(candidate);
+            } catch (e) {
+              console.error('Ошибка ICE кандидата:', e);
+            }
+          } else {
+            // НОВОЕ: Remote description еще не установлен — буферизуем
+            console.log('Буферизуем ICE-кандидат');
+            pendingIceCandidatesRef.current.push(candidate);
           }
         }
       });
@@ -146,12 +175,10 @@ export default function CallScreen({ route, navigation }) {
       channel.subscribe();
       channelRef.current = channel;
 
-      // 4. Если мы инициатор - создаем Offer
       if (callerId === user.id) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         
-        // Отправляем offer, явно указывая sdp и type
         channel.send({
           type: 'broadcast',
           event: 'offer',
@@ -163,7 +190,7 @@ export default function CallScreen({ route, navigation }) {
         });
         setStatus('ringing');
       } else {
-        setStatus('ringing'); // Ждем offer
+        setStatus('ringing');
       }
 
     } catch (err) {
@@ -222,7 +249,6 @@ export default function CallScreen({ route, navigation }) {
 
   return (
     <View style={[styles.container, { backgroundColor: '#1a1a1a' }]}>
-      {/* Удаленное видео (собеседник) */}
       {isVideoCall && status === 'connected' && (
         <video 
           ref={remoteVideoRef} 
@@ -232,7 +258,6 @@ export default function CallScreen({ route, navigation }) {
         />
       )}
 
-      {/* Локальное видео (картинка в картинке) */}
       {isVideoCall && (
         <video 
           ref={localVideoRef} 
@@ -243,7 +268,6 @@ export default function CallScreen({ route, navigation }) {
         />
       )}
 
-      {/* Оверлей с информацией */}
       <View style={styles.overlay}>
         <View style={styles.header}>
           <Text style={styles.title}>{title || 'Вызов'}</Text>
@@ -257,7 +281,6 @@ export default function CallScreen({ route, navigation }) {
 
         {error && <Text style={styles.error}>{error}</Text>}
 
-        {/* Кнопки управления */}
         {status === 'connected' && (
           <View style={styles.controls}>
             <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
@@ -267,7 +290,7 @@ export default function CallScreen({ route, navigation }) {
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '' : '📹'}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
