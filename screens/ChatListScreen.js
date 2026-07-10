@@ -15,6 +15,13 @@ export default function ChatListScreen({ navigation }) {
 
   useOnlineStatus();
 
+  useEffect(() => {
+    // Устанавливаем заголовок для веба
+    if (typeof document !== 'undefined') {
+      document.title = 'MAX 2.0';
+    }
+  }, []);
+
   useFocusEffect(
     React.useCallback(() => {
       loadUserData();

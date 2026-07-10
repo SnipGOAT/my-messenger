@@ -12,6 +12,13 @@ export default function CreateStoryScreen({ navigation }) {
   const [caption, setCaption] = useState('');
   const [uploading, setUploading] = useState(false);
 
+  useEffect(() => {
+    // Устанавливаем заголовок для веба
+    if (typeof document !== 'undefined') {
+      document.title = 'MAX 2.0';
+    }
+  }, []);
+
   const pickImage = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) {

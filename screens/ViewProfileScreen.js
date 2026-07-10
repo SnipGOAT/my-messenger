@@ -15,6 +15,13 @@ export default function ViewProfileScreen({ route, navigation }) {
   const [currentUserId, setCurrentUserId] = useState(null);
 
   useEffect(() => {
+    // Устанавливаем заголовок для веба
+    if (typeof document !== 'undefined') {
+      document.title = 'MAX 2.0';
+    }
+  }, []);
+
+  useEffect(() => {
     loadProfile();
 
     // Realtime подписка на изменения профиля

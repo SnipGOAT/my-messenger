@@ -23,6 +23,13 @@ export default function SettingsScreen({ navigation }) {
   const [originalUsername, setOriginalUsername] = useState('');
 
   useEffect(() => {
+    // Устанавливаем заголовок для веба
+    if (typeof document !== 'undefined') {
+      document.title = 'MAX 2.0';
+    }
+  }, []);
+
+  useEffect(() => {
     loadProfile();
   }, []);
 

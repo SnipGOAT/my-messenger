@@ -9,6 +9,13 @@ export default function NewChatScreen({ navigation }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
 
+  useEffect(() => {
+    // Устанавливаем заголовок для веба
+    if (typeof document !== 'undefined') {
+      document.title = 'MAX 2.0';
+    }
+  }, []);
+
   const searchUsers = async (query) => {
     setSearchQuery(query);
     if (query.trim().length < 2) {
