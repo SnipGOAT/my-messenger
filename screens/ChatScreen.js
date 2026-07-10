@@ -796,7 +796,7 @@ export default function ChatScreen({ route, navigation }) {
             {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>🖼️</Text>}
           </TouchableOpacity>
           <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickVideoForPreview} disabled={uploading}>
-            {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}></Text>}
+            {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>🎥</Text>}
           </TouchableOpacity>
           <TouchableOpacity style={[styles.attachButton, { backgroundColor: colors.inputBackground }]} onPress={pickDocumentForPreview} disabled={uploading}>
             {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.attachButtonText}>📎</Text>}
