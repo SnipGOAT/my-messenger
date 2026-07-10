@@ -4,7 +4,6 @@ import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
 
-// TURN-серверы (OpenRelay + fallback)
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
@@ -40,10 +39,12 @@ export default function CallScreen({ route, navigation }) {
   const remoteAudioRef = useRef(null);
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null); // НОВОЕ: сохраняем удаленный стрим
   const channelRef = useRef(null);
   const timerRef = useRef(null);
   const pendingIceRef = useRef([]);
   const remoteDescSetRef = useRef(false);
+  const audioContextRef = useRef(null); // НОВОЕ: аудио-контекст
 
   useEffect(() => {
     initCall();
@@ -66,6 +67,37 @@ export default function CallScreen({ route, navigation }) {
     }
   };
 
+  // НОВОЕ: Функция для проверки и восстановления аудио
+  const checkAndRestoreAudio = () => {
+    if (remoteAudioRef.current && remoteStreamRef.current) {
+      const audioTracks = remoteStreamRef.current.getAudioTracks();
+      console.log('Аудио треки:', audioTracks.length);
+      
+      audioTracks.forEach((track, index) => {
+        console.log(`Трек ${index}:`, {
+          enabled: track.enabled,
+          muted: track.muted,
+          readyState: track.readyState,
+          kind: track.kind
+        });
+        
+        // Если трек отключен, включаем его
+        if (!track.enabled) {
+          console.log('Включаем отключенный трек');
+          track.enabled = true;
+        }
+      });
+      
+      // Проверяем состояние аудио элемента
+      if (remoteAudioRef.current.paused) {
+        console.log('Аудио элемент на паузе, запускаем');
+        remoteAudioRef.current.play().catch(err => {
+          console.error('Ошибка запуска аудио:', err);
+        });
+      }
+    }
+  };
+
   const initCall = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -73,10 +105,21 @@ export default function CallScreen({ route, navigation }) {
 
       // Получаем доступ к микрофону/камере
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: { echoCancellation: true, noiseSuppression: true },
+        audio: { 
+          echoCancellation: true, 
+          noiseSuppression: true,
+          autoGainControl: true
+        },
         video: isVideoCall ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false
       });
       localStreamRef.current = stream;
+
+      // Логируем локальные треки
+      console.log('Локальные треки:', stream.getTracks().map(t => ({
+        kind: t.kind,
+        enabled: t.enabled,
+        readyState: t.readyState
+      })));
 
       if (Platform.OS === 'web' && localVideoRef.current && isVideoCall) {
         localVideoRef.current.srcObject = stream;
@@ -90,7 +133,10 @@ export default function CallScreen({ route, navigation }) {
       pcRef.current = pc;
 
       // Добавляем треки
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      stream.getTracks().forEach(track => {
+        pc.addTrack(track, stream);
+        console.log('Добавлен локальный трек:', track.kind);
+      });
 
       // Обработка ICE-кандидатов
       pc.onicecandidate = (event) => {
@@ -110,17 +156,36 @@ export default function CallScreen({ route, navigation }) {
 
       pc.oniceconnectionstatechange = () => {
         console.log('ICE состояние:', pc.iceConnectionState);
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        if (pc.iceConnectionState === 'failed') {
           setError('Потеряно соединение');
           setStatus('ended');
+        } else if (pc.iceConnectionState === 'disconnected') {
+          console.log('Соединение разорвано, пытаемся восстановить...');
+          // Пытаемся восстановить соединение
+          setTimeout(() => {
+            if (pc.iceConnectionState === 'disconnected') {
+              pc.restartIce();
+            }
+          }, 3000);
         }
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log('Состояние соединения:', pc.connectionState);
       };
 
       // Обработка удаленного трека
       pc.ontrack = (event) => {
-        console.log('Получен удаленный трек:', event.track.kind);
+        console.log('Получен удаленный трек:', {
+          kind: event.track.kind,
+          enabled: event.track.enabled,
+          readyState: event.track.readyState
+        });
         
         if (Platform.OS === 'web') {
+          // Сохраняем стрим
+          remoteStreamRef.current = event.streams[0];
+          
           if (event.track.kind === 'video' && remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = event.streams[0];
             remoteVideoRef.current.play().catch(err => {
@@ -130,14 +195,49 @@ export default function CallScreen({ route, navigation }) {
           
           if (event.track.kind === 'audio' && remoteAudioRef.current) {
             remoteAudioRef.current.srcObject = event.streams[0];
-            remoteAudioRef.current.play().catch(err => {
+            
+            // Создаем аудио-контекст для лучшего контроля
+            if (!audioContextRef.current) {
+              audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            // Резюмируем аудио-контекст (важно для браузеров!)
+            if (audioContextRef.current.state === 'suspended') {
+              audioContextRef.current.resume().then(() => {
+                console.log('Аудио-контекст возобновлен');
+              });
+            }
+            
+            remoteAudioRef.current.play().then(() => {
+              console.log('Аудио запущено успешно');
+            }).catch(err => {
               console.error('Ошибка аудио:', err);
+              // Пытаемся запустить снова после взаимодействия пользователя
+              setTimeout(() => {
+                remoteAudioRef.current.play().catch(e => console.error('Повторная ошибка:', e));
+              }, 100);
             });
           }
         }
         
+        // Отслеживаем состояние трека
+        event.track.onended = () => {
+          console.log('Удаленный трек завершен');
+        };
+        
+        event.track.onmute = () => {
+          console.log('Удаленный трек замьючен');
+        };
+        
+        event.track.onunmute = () => {
+          console.log('Удаленный трек размьючен');
+        };
+        
         setStatus('connected');
         startTimer();
+        
+        // Периодически проверяем аудио
+        setInterval(checkAndRestoreAudio, 5000);
       };
 
       // Подключаемся к каналу сигнализации
@@ -269,6 +369,7 @@ export default function CallScreen({ route, navigation }) {
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setIsMuted(!isMuted);
+        console.log('Микрофон:', audioTrack.enabled ? 'включен' : 'выключен');
       }
     }
   };
@@ -279,6 +380,7 @@ export default function CallScreen({ route, navigation }) {
       if (videoTrack) {
         videoTrack.enabled = !videoTrack.enabled;
         setIsVideoOff(!isVideoOff);
+        console.log('Камера:', videoTrack.enabled ? 'включена' : 'выключена');
       }
     }
   };
@@ -293,6 +395,9 @@ export default function CallScreen({ route, navigation }) {
     }
     if (pcRef.current) {
       pcRef.current.close();
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
     }
     if (timerRef.current) clearInterval(timerRef.current);
     setStatus('ended');
