@@ -1,6 +1,7 @@
 // screens/CallScreen.js
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { supabase } from '../lib/supabase'; // ИМПОРТ SUPABASE
 import { useTheme } from '../contexts/ThemeContext';
 import Peer from 'peerjs';
 
@@ -36,7 +37,11 @@ export default function CallScreen({ route, navigation }) {
 
       // Создаём Peer с уникальным ID (user.id)
       const peer = new Peer(user.id, {
-        debug: 2
+        debug: 2,
+        // Используем российский хост PeerJS (если есть) или стандартный
+        host: '/',
+        port: 443,
+        secure: true
       });
 
       peerRef.current = peer;
@@ -84,7 +89,9 @@ export default function CallScreen({ route, navigation }) {
       console.log('Получен удаленный поток');
       if (Platform.OS === 'web' && remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = remoteStream;
-        remoteVideoRef.current.play();
+        remoteVideoRef.current.play().catch(err => {
+          console.error('Ошибка воспроизведения:', err);
+        });
       }
       setStatus('connected');
       startTimer();
@@ -174,7 +181,10 @@ export default function CallScreen({ route, navigation }) {
     <View style={[styles.container, { backgroundColor: '#1a1a1a' }]}>
       {isVideoCall && status === 'connected' && (
         Platform.OS === 'web' ? (
-          <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideoWeb} />
+          <>
+            <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideoWeb} />
+            <audio ref={remoteAudioRef} autoPlay style={{ display: 'none' }} />
+          </>
         ) : (
           <View style={styles.remoteVideoMobile} />
         )
@@ -204,13 +214,13 @@ export default function CallScreen({ route, navigation }) {
         {status === 'connected' && (
           <View style={styles.controls}>
             <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
-              <Text style={styles.controlIcon}>{isMuted ? '🔇' : '🎤'}</Text>
+              <Text style={styles.controlIcon}>{isMuted ? '🔇' : ''}</Text>
               <Text style={styles.controlText}>{isMuted ? 'Вкл' : 'Выкл'}</Text>
             </TouchableOpacity>
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : ''}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
