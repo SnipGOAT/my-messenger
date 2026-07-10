@@ -20,6 +20,11 @@ import StoryViewsScreen from './screens/StoryViewsScreen';
 import ViewProfileScreen from './screens/ViewProfileScreen';
 import EditProfileScreen from './screens/EditProfileScreen';
 import { View, Text, useWindowDimensions, Platform } from 'react-native';
+import { checkSupabaseConnection } from './lib/supabase';
+
+useEffect(() => {
+  checkSupabaseConnection();
+}, []);
 
 const Stack = createNativeStackNavigator();
 
