@@ -4,16 +4,20 @@ import { View, Text, TouchableOpacity, StyleSheet, Platform, Alert } from 'react
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
 
-const APP_ID = 'f3912d4cb8b147428bd8448eefe89d36'; // Оставь App ID здесь (он публичный)
+const APP_ID = 'f3912d4cb8b147428bd8448eefe89d36'; // Вставь свой App ID
 
+// Правильный импорт для разных платформ
 let AgoraRTC = null;
 let RtcEngine = null;
 let RtcLocalView = null;
 let RtcRemoteView = null;
 
 if (Platform.OS === 'web') {
-  AgoraRTC = require('agora-rtc-sdk-ng').default;
+  // Для веба используем динамический импорт
+  const AgoraWeb = require('agora-rtc-sdk-ng');
+  AgoraRTC = AgoraWeb.default || AgoraWeb;
 } else {
+  // Для мобильных устройств
   const Agora = require('react-native-agora');
   RtcEngine = Agora.createAgoraRtcEngine;
   RtcLocalView = Agora.RtcLocalView;
@@ -49,7 +53,6 @@ export default function CallScreen({ route, navigation }) {
     };
   }, []);
 
-  // === НОВОЕ: Получаем токен из Supabase Edge Function ===
   const fetchAgoraToken = async () => {
     try {
       const { data, error } = await supabase.functions.invoke('generate-agora-token', {
@@ -57,7 +60,7 @@ export default function CallScreen({ route, navigation }) {
       });
 
       if (error) throw error;
-      return data; // { token, uid, appId }
+      return data;
     } catch (err) {
       console.error('Ошибка получения токена:', err);
       throw new Error('Не удалось получить токен для звонка');
@@ -66,7 +69,6 @@ export default function CallScreen({ route, navigation }) {
 
   const initWebCall = async () => {
     try {
-      // Получаем токен
       const { token, uid } = await fetchAgoraToken();
 
       const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
@@ -100,7 +102,6 @@ export default function CallScreen({ route, navigation }) {
       }
 
       const channelName = `chat_${chatId}`;
-      // Используем полученный токен
       await client.join(APP_ID, channelName, token, uid);
       await client.publish([microphoneTrack, cameraTrack]);
 
@@ -139,7 +140,6 @@ export default function CallScreen({ route, navigation }) {
       });
 
       const channelName = `chat_${chatId}`;
-      // Используем полученный токен
       engine.joinChannel(token, channelName, null, uid);
 
       setStatus('ringing');
@@ -249,13 +249,13 @@ export default function CallScreen({ route, navigation }) {
         {status === 'connected' && (
           <View style={styles.controls}>
             <TouchableOpacity style={[styles.controlBtn, isMuted && styles.controlBtnActive]} onPress={toggleMute}>
-              <Text style={styles.controlIcon}>{isMuted ? '🔇' : ''}</Text>
+              <Text style={styles.controlIcon}>{isMuted ? '🔇' : '🎤'}</Text>
               <Text style={styles.controlText}>{isMuted ? 'Вкл' : 'Выкл'}</Text>
             </TouchableOpacity>
             
             {isVideoCall && (
               <TouchableOpacity style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={toggleVideo}>
-                <Text style={styles.controlIcon}>{isVideoOff ? '📷' : '📹'}</Text>
+                <Text style={styles.controlIcon}>{isVideoOff ? '' : '📹'}</Text>
                 <Text style={styles.controlText}>{isVideoOff ? 'Вкл' : 'Выкл'}</Text>
               </TouchableOpacity>
             )}
