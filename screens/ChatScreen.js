@@ -14,14 +14,13 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
-import * as Sharing from 'expo-sharing';
 
-const EMOJIS = ['👍', '❤️', '', '😮', '😢', '', '🔥', ''];
+const EMOJIS = ['', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👎'];
 
 const FILE_ICONS = {
-  pdf: '📄', doc: '📝', docx: '📝', xls: '📊', xlsx: '📊',
-  ppt: '📽️', pptx: '📽️', zip: '🗜️', rar: '🗜️', '7z': '️',
-  txt: '', default: '📎'
+  pdf: '📄', doc: '📝', docx: '📝', xls: '', xlsx: '📊',
+  ppt: '📽️', pptx: '📽️', zip: '🗜️', rar: '🗜️', '7z': '🗜️',
+  txt: '📃', default: '📎'
 };
 
 const formatTime = (dateString) => {
@@ -60,11 +59,9 @@ const groupMessagesByDate = (messages) => {
   return Object.values(groups).sort((a, b) => new Date(a.date) - new Date(b.date));
 };
 
-// Функция скачивания файла
 const downloadFile = async (url, filename, type = 'image') => {
   try {
     if (Platform.OS === 'web') {
-      // Для веба: создаем ссылку и кликаем по ней
       const link = document.createElement('a');
       link.href = url;
       link.download = filename;
@@ -74,27 +71,22 @@ const downloadFile = async (url, filename, type = 'image') => {
       document.body.removeChild(link);
       return true;
     } else {
-      // Для мобильных: запрашиваем разрешение и сохраняем
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Ошибка', 'Необходимо разрешение на доступ к медиафайлам');
         return false;
       }
 
-      // Скачиваем файл во временную директорию
       const fileUri = FileSystem.documentDirectory + filename;
       const { uri } = await FileSystem.downloadAsync(url, fileUri);
 
-      // Сохраняем в галерею
       if (type === 'video') {
         await MediaLibrary.saveToLibraryAsync(uri);
       } else {
         await MediaLibrary.createAssetAsync(uri);
       }
 
-      // Очищаем временный файл
       await FileSystem.deleteAsync(uri, { idempotent: true });
-
       return true;
     }
   } catch (error) {
@@ -129,6 +121,12 @@ export default function ChatScreen({ route, navigation }) {
   const [forwardChats, setForwardChats] = useState([]);
 
   const [stagedMedia, setStagedMedia] = useState(null);
+
+  // НОВОЕ: Состояния для отслеживания прочтений
+  const [messageReads, setMessageReads] = useState({});
+  const [readersModalVisible, setReadersModalVisible] = useState(false);
+  const [selectedMessageForReaders, setSelectedMessageForReaders] = useState(null);
+  const [readersList, setReadersList] = useState([]);
 
   const typingTimeoutRef = useRef(null);
   const channelRef = useRef(null);
@@ -188,6 +186,65 @@ export default function ChatScreen({ route, navigation }) {
 
     return () => { supabase.removeChannel(channel); };
   }, [chatId]);
+
+  // НОВОЕ: Загрузка и подписка на прочтения сообщений
+  useEffect(() => {
+    if (!isGroup || messageIds.length === 0) return;
+
+    const loadReads = async () => {
+      const { data: reads } = await supabase
+        .from('message_reads')
+        .select('message_id, user_id, profiles(username, avatar_url)')
+        .in('message_id', messageIds);
+
+      if (reads) {
+        const readsMap = {};
+        reads.forEach(read => {
+          if (!readsMap[read.message_id]) {
+            readsMap[read.message_id] = [];
+          }
+          readsMap[read.message_id].push({
+            user_id: read.user_id,
+            username: read.profiles?.username || 'Аноним',
+            avatar_url: read.profiles?.avatar_url
+          });
+        });
+        setMessageReads(readsMap);
+      }
+    };
+
+    loadReads();
+
+    const readsChannel = supabase
+      .channel(`message_reads:${chatId}`)
+      .on('postgres_changes', 
+        { event: 'INSERT', schema: 'public', table: 'message_reads' },
+        async (payload) => {
+          const newRead = payload.new;
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('username, avatar_url')
+            .eq('id', newRead.user_id)
+            .single();
+
+          setMessageReads(prev => {
+            const updated = { ...prev };
+            if (!updated[newRead.message_id]) {
+              updated[newRead.message_id] = [];
+            }
+            updated[newRead.message_id].push({
+              user_id: newRead.user_id,
+              username: profile?.username || 'Аноним',
+              avatar_url: profile?.avatar_url
+            });
+            return updated;
+          });
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(readsChannel); };
+  }, [chatId, isGroup, messageIds.length]);
 
   useEffect(() => {
     if (forwardModalVisible) {
@@ -252,12 +309,41 @@ export default function ChatScreen({ route, navigation }) {
     }
   }, [messages.length, isSearchActive]);
 
+  // НОВОЕ: Обновленная функция пометки сообщений как прочитанных
   const markMessagesAsRead = async (userId) => {
     if (!userId) return;
-    const { data: unreadMessages } = await supabase.from('messages').select('id').eq('chat_id', chatId).neq('sender_id', userId).eq('is_read', false);
+
+    const { data: unreadMessages } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('chat_id', chatId)
+      .neq('sender_id', userId)
+      .eq('is_read', false);
+
     if (unreadMessages && unreadMessages.length > 0) {
-      await supabase.from('messages').update({ is_read: true }).in('id', unreadMessages.map(m => m.id));
+      // Для личных чатов: обновляем поле is_read
+      if (!isGroup) {
+        await supabase.from('messages').update({ is_read: true }).in('id', unreadMessages.map(m => m.id));
+      }
+      
+      // Для всех чатов: добавляем записи в message_reads
+      const readsToInsert = unreadMessages.map(msg => ({
+        message_id: msg.id,
+        user_id: userId
+      }));
+
+      await supabase.from('message_reads').upsert(readsToInsert, {
+        onConflict: 'message_id,user_id'
+      });
     }
+  };
+
+  // НОВОЕ: Функция просмотра списка прочитавших
+  const handleViewReaders = async (message) => {
+    const readers = messageReads[message.id] || [];
+    setReadersList(readers);
+    setSelectedMessageForReaders(message);
+    setReadersModalVisible(true);
   };
 
   const handleTextChange = (newText) => {
@@ -466,7 +552,6 @@ export default function ChatScreen({ route, navigation }) {
     if (!success) Platform.OS === 'web' ? window.alert('Не удалось начать запись') : Alert.alert('Ошибка', 'Не удалось начать запись');
   };
 
-  // Функция скачивания для конкретного сообщения
   const handleDownload = async (message) => {
     if (message.file_url) {
       const filename = `photo_${Date.now()}.jpg`;
@@ -496,7 +581,7 @@ export default function ChatScreen({ route, navigation }) {
       <View style={[styles.quoteContainer, { borderLeftColor: isOriginalMe ? colors.myMessage : colors.textSecondary }]}>
         <Text style={[styles.quoteAuthor, { color: isOriginalMe ? colors.myMessage : colors.textSecondary }]}>{authorName}</Text>
         <Text style={[styles.quoteText, { color: colors.textSecondary }]} numberOfLines={2}>
-          {originalMessage.audio_url ? '🎤 Голосовое' : originalMessage.video_url ? ' Видео' : originalMessage.file_document_url ? `📎 ${originalMessage.file_name}` : originalMessage.content || '📷 Фото'}
+          {originalMessage.audio_url ? '🎤 Голосовое' : originalMessage.video_url ? '🎥 Видео' : originalMessage.file_document_url ? `📎 ${originalMessage.file_name}` : originalMessage.content || '📷 Фото'}
         </Text>
       </View>
     );
@@ -514,6 +599,10 @@ export default function ChatScreen({ route, navigation }) {
     const isPinned = pinnedMessage?.id === item.id;
     const messageTime = formatTime(item.created_at);
 
+    // НОВОЕ: Получаем количество прочитавших для групповых чатов
+    const readers = isGroup ? (messageReads[item.id] || []) : [];
+    const readersCount = readers.length;
+
     return (
       <Pressable 
         onLongPress={() => { setSelectedMessage(item); setActionMenuVisible(true); }}
@@ -529,7 +618,7 @@ export default function ChatScreen({ route, navigation }) {
         
         {item.forwarded_from_username && (
           <Text style={[styles.forwardedLabel, { color: isMe ? 'rgba(255,255,255,0.8)' : colors.primary }]}>
-            ️ Переслано от {item.forwarded_from_username}
+            ↪️ Переслано от {item.forwarded_from_username}
           </Text>
         )}
 
@@ -552,7 +641,26 @@ export default function ChatScreen({ route, navigation }) {
         {hasText && <Text style={[styles.messageText, { color: isMe ? '#fff' : colors.text }, (hasImage || hasVideo) && styles.textOnImage]}>{item.content}</Text>}
         
         <View style={styles.messageTimeContainer}>
-          {isMe && <Text style={[styles.statusText, (hasImage || hasVideo) && styles.statusOnImage]}>{item.is_read ? '✓✓' : '✓'}</Text>}
+          {/* НОВОЕ: Для групповых чатов показываем счетчик прочитавших */}
+          {isGroup && isMe && readersCount > 0 && (
+            <TouchableOpacity 
+              style={styles.readersCount}
+              onPress={() => handleViewReaders(item)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.readersCountText, { color: isMe ? 'rgba(255,255,255,0.7)' : colors.textSecondary }]}>
+                ✓✓ {readersCount}
+              </Text>
+            </TouchableOpacity>
+          )}
+          
+          {/* Для личных чатов оставляем старые галочки */}
+          {!isGroup && isMe && (
+            <Text style={[styles.statusText, (hasImage || hasVideo) && styles.statusOnImage]}>
+              {item.is_read ? '✓✓' : '✓'}
+            </Text>
+          )}
+          
           <Text style={[styles.messageTime, { color: isMe ? 'rgba(255,255,255,0.7)' : colors.textSecondary }, (hasImage || hasVideo) && styles.timeOnImage]}>
             {messageTime}
           </Text>
@@ -642,7 +750,7 @@ export default function ChatScreen({ route, navigation }) {
         >
           <Text style={[styles.chatHeaderTitle, { color: colors.text }]} numberOfLines={1}>{title}</Text>
           <TouchableOpacity onPress={() => setIsSearchActive(true)} style={styles.chatHeaderButton}>
-            <Text style={{ fontSize: 20 }}></Text>
+            <Text style={{ fontSize: 20 }}>🔍</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => navigation?.navigate('ChatInfo', { chatId, title, isGroup })} style={styles.chatHeaderButton}>
             <Text style={{ fontSize: 20 }}>⚙️</Text>
@@ -656,7 +764,7 @@ export default function ChatScreen({ route, navigation }) {
           <View style={{ flex: 1 }}>
             <Text style={[styles.pinnedTitle, { color: colors.textSecondary }]}>Закрепленное сообщение</Text>
             <Text style={[styles.pinnedText, { color: colors.text }]} numberOfLines={1}>
-              {pinnedMessage.content || (pinnedMessage.audio_url ? '🎤 Голосовое' : pinnedMessage.video_url ? '🎥 Видео' : pinnedMessage.file_document_url ? `📎 ${pinnedMessage.file_name}` : '📷 Фото')}
+              {pinnedMessage.content || (pinnedMessage.audio_url ? '🎤 Голосовое' : pinnedMessage.video_url ? ' Видео' : pinnedMessage.file_document_url ? `📎 ${pinnedMessage.file_name}` : '📷 Фото')}
             </Text>
           </View>
           {canPin && (
@@ -694,7 +802,7 @@ export default function ChatScreen({ route, navigation }) {
           <View style={styles.replyBannerContent}>
             <Text style={[styles.replyBannerTitle, { color: colors.primary }]}>Ответ {replyingTo.profiles?.username || 'анониму'}</Text>
             <Text style={[styles.replyBannerText, { color: colors.textSecondary }]} numberOfLines={1}>
-              {replyingTo.audio_url ? '🎤 Голосовое' : replyingTo.video_url ? ' Видео' : replyingTo.file_document_url ? `📎 ${replyingTo.file_name}` : replyingTo.content || '📷 Фото'}
+              {replyingTo.audio_url ? '🎤 Голосовое' : replyingTo.video_url ? '🎥 Видео' : replyingTo.file_document_url ? `📎 ${replyingTo.file_name}` : replyingTo.content || '📷 Фото'}
             </Text>
           </View>
           <TouchableOpacity onPress={() => setReplyingTo(null)} style={styles.replyBannerCancel}>
@@ -720,9 +828,9 @@ export default function ChatScreen({ route, navigation }) {
         <View style={[styles.previewContainer, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
           <View style={styles.previewHeader}>
             <Text style={[styles.previewTitle, { color: colors.textSecondary }]}>
-              {stagedMedia.type === 'image' && ' Предпросмотр фото'}
+              {stagedMedia.type === 'image' && '📷 Предпросмотр фото'}
               {stagedMedia.type === 'video' && '🎥 Предпросмотр видео'}
-              {stagedMedia.type === 'document' && '📎 Предпросмотр файла'}
+              {stagedMedia.type === 'document' && ' Предпросмотр файла'}
               {stagedMedia.type === 'audio' && '🎤 Предпросмотр голосового'}
             </Text>
             <TouchableOpacity onPress={cancelStagedMedia} style={styles.previewCancelButton}>
@@ -754,7 +862,7 @@ export default function ChatScreen({ route, navigation }) {
             )}
             {stagedMedia.type === 'audio' && (
               <View style={[styles.previewAudioCard, { backgroundColor: colors.inputBackground }]}>
-                <Text style={styles.previewAudioIcon}></Text>
+                <Text style={styles.previewAudioIcon}>🎤</Text>
                 <Text style={[styles.previewAudioText, { color: colors.text }]}>Голосовое сообщение</Text>
               </View>
             )}
@@ -852,7 +960,6 @@ export default function ChatScreen({ route, navigation }) {
                 <Text style={[styles.actionMenuText, { color: colors.primary }]}>↪️ Переслать</Text>
               </TouchableOpacity>
 
-              {/* Кнопка скачивания для фото и видео */}
               {(selectedMessage?.file_url || selectedMessage?.video_url) && (
                 <TouchableOpacity style={styles.actionMenuItem} activeOpacity={0.7} onPress={() => handleDownload(selectedMessage)}>
                   <Text style={[styles.actionMenuText, { color: colors.primary }]}>⬇️ Скачать</Text>
@@ -861,7 +968,7 @@ export default function ChatScreen({ route, navigation }) {
 
               {canPin && selectedMessage?.id !== pinnedMessage?.id && (
                 <TouchableOpacity style={styles.actionMenuItem} activeOpacity={0.7} onPress={() => handlePinMessage(selectedMessage.id)}>
-                  <Text style={[styles.actionMenuText, { color: colors.primary }]}>📌 Закрепить</Text>
+                  <Text style={[styles.actionMenuText, { color: colors.primary }]}> Закрепить</Text>
                 </TouchableOpacity>
               )}
               {pinnedMessage && selectedMessage?.id === pinnedMessage.id && (
@@ -906,7 +1013,7 @@ export default function ChatScreen({ route, navigation }) {
           {forwardingMessage && (
             <View style={[styles.forwardPreview, { backgroundColor: colors.surface }]}>
               <Text style={[styles.forwardPreviewText, { color: colors.textSecondary }]} numberOfLines={2}>
-                {forwardingMessage.content || (forwardingMessage.audio_url ? '🎤 Голосовое' : forwardingMessage.video_url ? ' Видео' : forwardingMessage.file_document_url ? `📎 ${forwardingMessage.file_name}` : '📷 Фото')}
+                {forwardingMessage.content || (forwardingMessage.audio_url ? '🎤 Голосовое' : forwardingMessage.video_url ? '🎥 Видео' : forwardingMessage.file_document_url ? `📎 ${forwardingMessage.file_name}` : '📷 Фото')}
               </Text>
             </View>
           )}
@@ -932,6 +1039,47 @@ export default function ChatScreen({ route, navigation }) {
             )}
           />
         </View>
+      </Modal>
+
+      {/* НОВОЕ: Модальное окно со списком прочитавших */}
+      <Modal visible={readersModalVisible} transparent animationType="fade" onRequestClose={() => setReadersModalVisible(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setReadersModalVisible(false)}>
+          <Pressable onPress={(e) => { e.stopPropagation(); }} style={[styles.readersModal, { backgroundColor: colors.surface }]}>
+            <View style={styles.readersModalHeader}>
+              <Text style={[styles.readersModalTitle, { color: colors.text }]}>
+                Прочитали ({readersList.length})
+              </Text>
+              <TouchableOpacity onPress={() => setReadersModalVisible(false)} style={styles.closeButton}>
+                <Text style={{ fontSize: 24, color: colors.textSecondary }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <FlatList
+              data={readersList}
+              keyExtractor={(item) => item.user_id}
+              renderItem={({ item }) => (
+                <View style={[styles.readerItem, { borderBottomColor: colors.border }]}>
+                  {item.avatar_url ? (
+                    <Image source={{ uri: item.avatar_url }} style={styles.readerAvatar} />
+                  ) : (
+                    <View style={[styles.readerAvatarPlaceholder, { backgroundColor: colors.inputBackground }]}>
+                      <Text></Text>
+                    </View>
+                  )}
+                  <Text style={[styles.readerName, { color: colors.text }]}>
+                    {item.username}
+                    {item.user_id === currentUserId && ' (Вы)'}
+                  </Text>
+                </View>
+              )}
+              ListEmptyComponent={
+                <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                  Никто еще не прочитал
+                </Text>
+              }
+            />
+          </Pressable>
+        </Pressable>
       </Modal>
 
     </KeyboardAvoidingView>
@@ -973,6 +1121,19 @@ const styles = StyleSheet.create({
   messageTimeContainer: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 4, marginRight: 4 },
   messageTime: { fontSize: 11, marginLeft: 4 },
   timeOnImage: { color: 'rgba(255,255,255,0.8)', backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4, marginTop: 4 },
+
+  // НОВОЕ: Стили для счетчика прочитавших
+  readersCount: {
+    marginRight: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.1)',
+  },
+  readersCountText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
 
   reactionsContainer: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 4, paddingHorizontal: 4 },
   reactionEmoji: { fontSize: 16, marginRight: 4, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 10, paddingHorizontal: 4, paddingVertical: 2 },
@@ -1048,4 +1209,52 @@ const styles = StyleSheet.create({
   dateHeaderLine: { flex: 1, height: 1 },
   dateHeaderText: { fontSize: 13, fontWeight: '600', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
   messageWrapper: { marginBottom: 2 },
+
+  // НОВОЕ: Стили для модального окна прочитавших
+  readersModal: {
+    width: '90%',
+    maxHeight: '70%',
+    borderRadius: 20,
+    padding: 20,
+  },
+  readersModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.1)',
+  },
+  readersModalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  closeButton: {
+    padding: 5,
+  },
+  readerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  readerAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 12,
+  },
+  readerAvatarPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  readerName: {
+    fontSize: 15,
+    fontWeight: '500',
+  },
 });
